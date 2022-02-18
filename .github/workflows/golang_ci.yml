@@ -1,0 +1,43 @@
+name: golang_ci
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+
+jobs:
+  build:
+    name: go-vet-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.17.7
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.17.7
+      - name: Cache go modules
+        uses: actions/cache@v2
+        with:
+          path: ~/go/pkg/mod
+          key:  golang_ci_modules
+          restore-keys: golang_ci_modules
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+
+      - name: Configure for go modules
+        run: |
+          git config --global url."https://git:${{ secrets.MODE_COMMON_GITHUB_TOKEN }}@github.com/moderepo".insteadOf "https://github.com/moderepo"
+
+      - name: Get dependencies
+        run: |
+          go generate ./...
+          go get -v -t -d ./...
+
+      - name: apdu
+        run: |
+          go vet ./apdu/...
+          go test ./apdu/...
+
+      - name: npdu
+        run: |
+          go vet ./npdu/...
+          go test ./npdu/...
