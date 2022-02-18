@@ -1,86 +1,91 @@
-package bacnet
+package apdu
 
 // application encoding (as opposed to context specific)
 type (
-	APDUApplicationTag struct {
-		Type       APDUType
+	ApplicationTag struct {
+		Type       TagType
 		DataLength int
 		DataValue  []byte
 	}
 
-	// APDUApplicationTypeBase has the shared encoding functions for types in the application class. The
+	// ApplicationTypeBase has the shared encoding functions for types in the application class. The
 	// specific structs implement the common interface
-	APDUApplicationTypeBase struct {
-		APDUTypeBase
+	ApplicationTypeBase struct {
+		TagTypeBase
 	}
 
 	// Rather tedious way to avoid several large and complicated switch statements
-	APDUApplicationNullType struct {
-		APDUApplicationTypeBase
+	ApplicationNullType struct {
+		ApplicationTypeBase
 	}
 
-	APDUApplicationBoolType struct {
-		APDUApplicationTypeBase
+	ApplicationBoolType struct {
+		ApplicationTypeBase
 		val bool
 	}
-	APDUApplicationUnsignedIntType struct {
-		APDUApplicationTypeBase
+	ApplicationUnsignedIntType struct {
+		ApplicationTypeBase
 		val uint
 	}
-	APDUApplicationSignedIntType struct {
+	ApplicationSignedIntType struct {
 	}
-	APDUApplicationRealType struct {
+	ApplicationRealType struct {
 	}
-	APDUApplicationDoubleType struct {
+	ApplicationDoubleType struct {
 	}
-	APDUApplicationOctetStringType struct {
+	ApplicationOctetStringType struct {
 	}
-	APDUApplicationCharacterStringType struct {
+	ApplicationCharacterStringType struct {
 	}
-	APDUApplicationBitStringType struct {
+	ApplicationBitStringType struct {
 	}
-	APDUApplicationEnumeratedType struct {
+	ApplicationEnumeratedType struct {
 	}
-	APDUApplicationDateType struct {
+	ApplicationDateType struct {
 	}
-	APDUApplicationTimeType struct {
+	ApplicationTimeType struct {
 	}
-	APDUApplicationObjectIDType struct {
+	ApplicationObjectIDType struct {
 	}
 )
 
 var (
-	_ APDUType = (*APDUApplicationNullType)(nil)
-	_ APDUType = (*APDUApplicationBoolType)(nil)
-	_ APDUType = (*APDUApplicationUnsignedIntType)(nil)
+	_ TagType = (*ApplicationNullType)(nil)
+	_ TagType = (*ApplicationBoolType)(nil)
+	_ TagType = (*ApplicationUnsignedIntType)(nil)
 )
 
-func (p *APDUApplicationNullType) EncodeAsTagData(control *byte, class APDUTagClass) []byte {
-	p.encodeTagNumber(control, uint8(APDUTagNumberDataNull))
-	*control |= p.encodeClass(class)
+func (p *ApplicationNullType) EncodeAsTagData(class TagClass) []byte {
+	var control byte
+	p.encodeTagNumber(&control, uint8(TagNumberDataNull))
+	p.encodeClass(&control, class)
 	// NULL is just 0 for everything
-	return nil
+	return []byte{control}
 }
 
-func (p *APDUApplicationBoolType) EncodeAsTagData(control *byte, class APDUTagClass) []byte {
+func (p *ApplicationBoolType) EncodeAsTagData(class TagClass) []byte {
+	var control byte
 	// Technically, this is not allowed, but this really clutters up the interface to have an error
 	// for this one case.
-	if class == APDUTagContextSpecificClass {
+	if class == TagContextSpecificClass {
 		// some kind of output?
 	}
-	p.encodeTagNumber(control, uint8(APDUTagNumberDataBool))
-	*control |= p.encodeClass(class)
+	p.encodeTagNumber(&control, uint8(TagNumberDataBool))
+	p.encodeClass(&control, class)
 	shift := 0
 	if !p.val {
 		shift = 1
 	}
-	*control |= 1 << shift
+	control |= byte(1) << shift
 
-	// NULL is just 0 for everything
-	return nil
+	// bool is encoded into the first byte
+	return []byte{control}
 }
-func (p *APDUApplicationUnsignedIntType) EncodeAsTagData(control *byte, class APDUTagClass) []byte {
-	p.encodeTagNumber(control, uint8(APDUTagNumberDataUnsignedInt))
-	*control |= p.encodeClass(class)
-	return nil
+func (p *ApplicationUnsignedIntType) EncodeAsTagData(class TagClass) []byte {
+	var control byte
+	p.encodeTagNumber(&control, uint8(TagNumberDataUnsignedInt))
+	p.encodeClass(&control, class)
+
+	// This is not right
+	return []byte{control}
 }

@@ -1,4 +1,6 @@
-package bacnet
+package apdu
+
+import "bytes"
 
 // Summary: (For more detail, the actual bits are laid out in front the struct that are represented by the bits
 // APDU encoding is a bit trickier than NPDU. There are eight types of message request types: Confirmed,
@@ -33,9 +35,14 @@ package bacnet
 type PDUType int8
 
 const (
-	// The bacnet code shifts these instead of incrementing. We can do that if it makes sense.
 	PDUTypeConfirmedServiceRequest   PDUType = 0
-	PDUTypeUnconfirmedServiceRequest         = 1
+	PDUTypeUnconfirmedServiceRequest         = 0x10
+	PDUTypeComplexAck                        = 0x30
+	PDUTypeSegmentAck                        = 0x40
+	PDUTypeError                             = 0x50
+	PDUTypeReject                            = 0x60
+	PDUTypeAbort                             = 0x70
+
 	// 6 more
 )
 
@@ -49,12 +56,37 @@ const (
 	PDUServiceUnconfirmedWhoIs = 8
 )
 
+// ServiceUnconfirmed do not need confirmations. Should just be service, and we can figure out
+// confirmed/unconfirmed, since it can't be both.
+type ServiceUnconfirmed uint8
+
+// The values for ServiceUnconfirmed
+const (
+	ServiceUnconfirmedIAm ServiceUnconfirmed = iota
+	ServiceUnconfirmedIHave
+	ServiceUnconfirmedCOVNotification
+	ServiceUnconfirmedEventNotification
+	ServiceUnconfirmedPrivateTransfer
+	ServiceUnconfirmedTextMessage
+	ServiceUnconfirmedTimeSync
+	ServiceUnconfirmedWhoHas
+	ServiceUnconfirmedWhoIs
+	ServiceUnconfirmedUTCTimeSync
+	ServiceUnconfirmedWriteGroup
+)
+
 type (
-	// APDUMessage is the base type for the various types of APDU messages.
-	APDUMessage struct {
+	Message interface {
+		Encode() ([]byte, error)
+	}
+
+	// Message is the base type for the various types of APDU messages.
+	MessageBase struct {
 		// The first nibble of the message is the service type. That's the only common part of the messages
 		ServiceType PDUType
 	}
+
+	// ConfirmedMessage has the following encoding:
 	//    7   6   5   4   3   2   1   0
 	//  |---|---|---|---|---|---|---|---|
 	//  | PDU Type      |SEG|MOR| SA| 0 |
@@ -71,11 +103,13 @@ type (
 	//  |---|---|---|---|---|---|---|---|
 	//  | Service Request               |
 	//  |      .                        |
-	//         .
+	//  |      .                        |
 	//  |      .                        |
 	//  |---|---|---|---|---|---|---|---|
-	APDUConfirmedMessage struct {
-		APDUMessage
+	// Implementation note: We use pointers to show that parts of the message may be empty. It's not a
+	// good way, but it's convenient shorthand.
+	ConfirmedMessage struct {
+		MessageBase
 		// 3 bits of the second half of the nibble. (last bit is 0)
 		IsSegmented               bool
 		DoSegmentsFollow          bool
@@ -86,6 +120,8 @@ type (
 		ConfirmedServiceID        uint8
 		ServiceData               []byte
 	}
+
+	// UnconfirmedMessage is a little simpler and has the following encoding:
 	//   7   6   5   4   3   2   1   0
 	// |---|---|---|---|---|---|---|---|
 	// | PDU Type      | 0 | 0 | 0 | 0 |
@@ -97,255 +133,48 @@ type (
 	//       .
 	// |     .                         |
 	// |---|---|---|---|---|---|---|---|
-	APDUUnconfirmedMessage struct {
-		APDUMessage
+	// Specifically, Meaning that the other flags that may be set in the ConfirmedMessage are all 0.
+	UnconfirmedMessage struct {
+		MessageBase
 		// The rest of the byte for the PDUType is 0
 		UnConfirmedServiceID PDUService
-		ServiceData          []APDUType
+		ServiceData          []TagType
 	}
 )
 
-// Message Parameters
-// These are base types or interfaces. Concrete implementations are in the respective files.
-// APDU tags: all about encoding APDU message parameters.
-// APDU messages have parameters in the request data, Described in 20.2 of the spec. There are two
-// types of parameters. The parameters are identified by tags, which fall into two "classes":
-// fundamental data types (application tags), and inferred types (context specific tags). As with most
-// other encoded BACnet types, the first byte describes the rest of the tag, including the length.
-// Bit Number:
-//    7     6     5     4     3     2     1     0
-// |-----|-----|-----|-----|-----|-----|-----|-----|
-// | Tag Number(*)         |Class|Length/Value/Type|
-// |-----|-----|-----|-----|-----|-----|-----|-----|
-// Tag Number: tags from 0-14 will be in the first four bits. 1111 (15) is a flag indicating that
-//    the tag number is in the immediate byte after this one, up to 254. >255 is not allowed. For
-//    Application data, the tag number indicates the type of data (bool, int, etc.). For Context
-//    Specific, it is... context specific.
-// Class: 0: application, 1: context specific
-// Length/Value/Type: This might be the actual data, or it might just be describing the data, depending
-// on the class and the data itself (20.2.1.3.1 in the spec)
-// Application (byte 3 is 0)
-//  - Boolean: The three remaining bits of the byte are: False: 000, True: 001
-//  - Others:
-//    Length:
-//    0 <=  4:  Bits 2-0, with 2 being the most significant. (So, 000-100)
-//    5 <= 253: Bits 2-0 set to 101, and the next byte is the length. unless the Tag Number > 14, it
-//              is the byte after the tag number byte.
-//    254 <= 65535: Bits 2-0 set to 101, and the next byte is 0xFE, unless the Tag Number > 14, it
-//              is the byte after the tag number byte, and the next *two* bytes are the length
-//    65536 <= 2^32-1: Bits 2-0 set to 101, and the next byte is 0xFF, unless the Tag Number > 14, it
-//              is the byte after the tag number byte, and the next *four* bytes are the length
-//     > 2^32-1 are not allowed
-//
-// Constructed Context specific (byte 3 is 1):
-//  - Tag number is arbitrary (context specific)
-//  - Length: this is always the length. Data will be stored outside of this byte.
-// Constructed (context specific, I guess):
-//  - Length is always length (no encoding boolean or small integers in this space)
-//  - In addition, there will be a Closing tag, which is identical to the opening tag, but length is 111
-//
-// (*)Tag Number: Technically, both Application and ContextSpecific tags have "tag numbers", but for
-// Application tags, the tag number is overloaded as the type, so we don't include a tag number in the
-// struct. The enum includes TagNumber, though as an indication that it goes in the tag number slot in
-// the data. Either way, it's confusing, but hopefully, less confusing than the spec.
-// TagClass indicates the bit for the class. (bit 3 in the Tag byte).
-
-type APDUTagClass int8
-
-const (
-	APDUTagApplicationClass     = iota
-	APDUTagContextSpecificClass = 1
+var (
+	_ (Message) = (*ConfirmedMessage)(nil)
+	_ (Message) = (*UnconfirmedMessage)(nil)
 )
-
-// APDUTagNumberType is used in to specify the type in the tags, but is only in the tag number field for
-// application class tags.
-type APDUTagNumberType uint8
-
-const (
-	APDUTagNumberDataNull            APDUTagNumberType = iota // 0
-	APDUTagNumberDataBool                                     // 1
-	APDUTagNumberDataUnsignedInt                              // 2
-	APDUTagNumberDataSignedInt                                // 3
-	APDUTagNumberDataReal                                     // 4
-	APDUTagNumberDataDouble                                   // 5
-	APDUTagNumberDataOctetString                              // 6
-	APDUTagNumberDataCharacterString                          // 7
-	APDUTagNumberDataBitString                                // 8
-	APDUTagNumberDataEnumerated                               // 9
-	APDUTagNumberDataDate                                     // 10
-	APDUTagNumberDataTime                                     // 11
-	APDUTagNumberDataObjectID                                 // 12
-	APDUTagNumberDataReserved1                                // 13
-	APDUTagNumberDataRserved2                                 // 14
-	APDUTagNumberDataReserved3                                // 15
-	APDUTagNumberDataApplicationTag                           // 16
-)
-
-type (
-	APDUType interface {
-		// Encodes the type into the control byte and the data bytes if necessary. For null or bool, for
-		// example, the return value is nil and the data is encoded into the control byte.
-		// This function will clear the existing control
-		EncodeAsTagData(control *byte, class APDUTagClass) []byte
-	}
-
-	// Base for all types
-	APDUTypeBase struct {
-	}
-)
-
-// NewAPDUContextSpecificTagFromUint32 creates a tag for an uint32
-// Note: even though this takes a uint32, the spec says that it should be in the smallest number of bytes
-// possible.
-// func NewAPDUContextSpecificTagFromUint(d uint, tagNumber uint8) *APDUContextSpecificTag {
-
-// 	return &APDUContextSpecificTag{
-// 		APDUParameterBase: APDUParameterBase{
-// 			Type:     APDUTagContextSpecificClass,
-// 			DataType: APDUTagNumberDataUnsignedInt,
-// 		},
-// 		DataLength: GetUnsignedIntByteSize(d),
-// 		Data:       d,
-// 	}
-// }
-
-// The control byte is:
-//    7   6   5   4   3   2   1   0
-//  |---|---|---|---|---|---|---|---|
-//  | Tag           |cls| "length"  |
-// Where tag is a number or a type, but called a type, class is a bit, and length is length, or maybe
-// data. But, we let the caller decide. It
 
 // signed matters, size does not, since we need to make it as small as possible in encoding.
-func NewWhoisAPDUMessage(low, high uint) *APDUUnconfirmedMessage {
-	return &APDUUnconfirmedMessage{
-		APDUMessage:          APDUMessage{PDUTypeUnconfirmedServiceRequest},
+func NewWhoisMessage(low, high uint) *UnconfirmedMessage {
+	return &UnconfirmedMessage{
+		MessageBase:          MessageBase{PDUTypeUnconfirmedServiceRequest},
 		UnConfirmedServiceID: PDUServiceUnconfirmedWhoIs,
-		ServiceData: []APDUType{
-			NewAPDUContextSpecificUnsignedInt(low, 0),
-			NewAPDUContextSpecificUnsignedInt(high, 1),
+		ServiceData: []TagType{
+			NewContextSpecificUnsignedInt(0, low),
+			NewContextSpecificUnsignedInt(1, high),
 		},
 	}
-
 }
 
-// Functions for paramters common to application and context specific
+func (cm *ConfirmedMessage) Encode() ([]byte, error) {
+	return nil, nil
+}
 
-// For application parameters/tags, they are under 14 and will fit in the control byte. For context specific,
-// they *can* be larger than 14, the nibble is set to F and the tag is first byte in the slice. Tag numbers
-// larger than 255 are not supported.
-func (b *APDUTypeBase) encodeTagNumber(control *byte, tagNumber uint8) []byte {
-	if tagNumber < 14 {
-		*control = byte(tagNumber << 4)
-		return nil
-	} else {
-		*control = byte(0xF0 | *control)
-		tagBytes := make([]byte, 1)
-		tagBytes[0] = tagNumber
-		return tagBytes
+// This is generic enough to encode all Unconfirmed messages.
+func (um *UnconfirmedMessage) Encode() ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 2))
+
+	buf.WriteByte(byte(um.ServiceType)) // I thought << 5
+	buf.WriteByte(byte(um.UnConfirmedServiceID))
+
+	for _, param := range um.ServiceData {
+		// This is probably more complicated than it needs to be. But, until I study the encodings for
+		// each type and class, it's better to keep them separate for now.
+		buf.Write(param.EncodeAsTagData(TagContextSpecificClass))
 	}
 
-}
-
-func (b *APDUTypeBase) encodeClass(t APDUTagClass) byte {
-	// should | this like the other functions
-	return byte(t << 3)
-}
-
-func (b *APDUTypeBase) encodeLength(control *byte, len uint) []byte {
-
-	// I'm not sure if these comments help explain it better than the code. But, at least there are
-	// 2 explanations
-	// 0 <= len <= 4:
-	// control: | 0-4|class|len|
-	//
-	// 5 <= len <= 253
-	// control: | 0-4|class|101| (bytes 5 and 7 are set, 6 is not){
-	// len byte 0: length
-
-	// 254 <= len <= 65535
-	// control: | 0-4|class|101| (bytes 5 and 7 are set, 6 is not){
-	// len byte 0: 254
-	// len byte 1,2: length
-	//
-	// 65535 <= len <= 2^32-1
-	// control: | 0-4|class|101| (bytes 5 and 7 are set, 6 is not){
-	// len byte 0: 255
-	// len byte 1-4: length
-	var lengthBytes []byte
-	if len <= 4 {
-		*control |= byte(len)
-	} else {
-		*control |= 5
-		if len <= 253 { // up to 253, length is the first byte, and the data is following
-			lengthBytes = EncodeUint(len, 1)
-		} else if len <= 65535 {
-			lengthBytes = make([]byte, 1, 1)
-			lengthBytes[0] = 254
-			lengthBytes = append(lengthBytes, EncodeUint(len, 2)...)
-		} else {
-			lengthBytes[0] = 255
-			lengthBytes = append(lengthBytes, EncodeUint(len, 4)...)
-		}
-	}
-
-	return lengthBytes
-}
-
-// Encoding and decoding helpers
-
-// GetUnsignedIntByteSize returns the number of bytes the int will take. If an uint64 will fit into 3 bytes,
-// we will encoded to fit in 3 bytes.
-func GetUnsignedIntByteSize(val uint) uint {
-	if val <= 0xFF {
-		return 1
-	} else if val <= 0xFFFF {
-		return 2
-	} else if val <= 0xFFFFFF {
-		return 3
-	} else if val <= 0x00000000FFFFFFFF {
-		return 4
-	} else if val <= 0x000000FFFFFFFFFF {
-		return 5
-	} else if val <= 0x0000FFFFFFFFFFFF {
-		return 6
-	} else if val <= 0x00FFFFFFFFFFFFFF {
-		return 7
-	} else {
-		return 8
-	}
-}
-
-// encoding/binary is preferable than doing this ourselves, but it doesn't work for 2 reasons:
-// 1. if we have a 64 bit integer that is small enough to fit into 8 bits, BACnet wants the 8 bit integer
-// 2. BACnet also wants 3
-// why would they?), but BACnet wants
-
-// EncodeUint encodes the data into a byte array
-func EncodeUint(val uint, numBytes uint) []byte {
-
-	buf := make([]byte, numBytes, numBytes)
-	var i uint
-	for i = 0; i < numBytes; i++ {
-		shift := (numBytes - 1 - i) * 8
-		// mask all but one byte of the val and set each element of the byte array
-		mask := uint(0xFF << shift)
-		buf[i] = (byte)((val & mask) >> shift)
-	}
-
-	return buf
-}
-
-// DecodeUint takes the raw byte array and converts it back to the Uint
-func DecodeUint(raw []byte) uint {
-
-	var val uint
-	numBytes := len(raw)
-	for i := 0; i < numBytes; i++ {
-		shift := (numBytes - 1 - i) * 8
-		bVal := (uint)(raw[i]) << shift
-		val += bVal
-	}
-
-	return val
+	return buf.Bytes(), nil
 }

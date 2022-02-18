@@ -1,14 +1,20 @@
-package bacnet
+package npdu
 
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/shigmas/modore/pkg/apdu"
+)
+
+const (
+	// DefaultProtocolVersion is the NPDU protocol version, which is 1.
+	DefaultProtocolVersion uint8 = 1
 )
 
 // NetworkMessagePriority is the 2 bit priority part of the Control Information
 type NetworkMessagePriority uint8 // smallest int. 6 extra bits
-
 // NetworkMessagePriority values
 const (
 	NormalMessage            NetworkMessagePriority = 0b00
@@ -17,9 +23,25 @@ const (
 	LifeSafetyMessage                               = 0b11
 )
 
+// NetworkLayerMessageType is present if bit 7 of the Control byte is set.
+type NetworkLayerMessageType uint8
+
+// NetworkLayerMessageType values
 const (
-	// DefaultProtocolVersion is the NPDU protocol version, which is 1.
-	DefaultProtocolVersion uint8 = 1
+	NetworkLayerWhoIsMessage                     = 0x00
+	NetworkLayerIAmyMessage                      = 0x01
+	NetworkLayerICouldBeMessage                  = 0x02
+	NetworkLayerRejectMessage                    = 0x03
+	NetworkLayerRouterBusyMessage                = 0x04
+	NetworkLayerRouterAvailableMessage           = 0x05
+	NetworkLayerInitializeRoutingTableMessage    = 0x06
+	NetworkLayerInitializeRoutingTableAckMessage = 0x07
+	NetworkLayerEstablishConnectionMessage       = 0x08
+	NetworkLayerDisconnectConnectionMessage      = 0x09
+	NetworkLayerWhatIsNetworkNumberMessage       = 0x12
+	NetworkLayerNetworkNumberIsMessage           = 0x13
+	// X'14' to X'7F': Reserved for use by ASHRAE
+	// X'80' to X'FF': Available for vendor proprietary messages
 )
 
 type (
@@ -29,15 +51,7 @@ type (
 	// if it's just raw data or a meaningful number. But, in BACnet, that is often the case.) For variable
 	// bytes, we just use []byte.
 
-	// NPDUControl has the following format
-	// 01234567
-	// 01: Network Priority
-	//   2: Reply parameter
-	//    3: Source specifier: About the Source
-	//     4: Reserved. 0
-	//      5: Destination specifier: About destination and hop
-	//       6: Reserved. 0
-	//        7: Flag for Network message (has message type) or application (APDU) message (no message type)
+	// Control has the following format
 	// This is the interpretation of the second byte in the BACnet NPDU message
 	// The member names are quite long, yet some of them are still unclear.
 	// IsBACNetConfirmedRequestPDUPresent: if this is false, it means another type of reply is present (not
@@ -46,64 +60,91 @@ type (
 	// DestinationSpecifiersPresent: DNET, DLEN, and DADR values must be set, as well as Hop Count.
 	// IsNDSUNetworkLayerMessage: Network Service Data Unit. If false, it is a BACnet APDU (Application
 	//    Protocol Data Unit)
-	NPDUControl struct {
+	// This will be encoded as a byte
+	//   7   6   5   4   3   2   1   0
+	// |---|---|---|---|---|---|---|---|
+	// | N | R | D | R | S | C | Prio  |
+	// N: 1: Network layer, 0: APDU (no message type - see message struct)
+	// bits 6 and 4 are Reserved: 0
+	// D: Destination Address specifier 0: not present, 1: Present
+	// S: Source Address specifier 0: not present, 1: Present
+	// C: flag for Confirmed request PDU
+	// Priority: See NetworkMessagePriority
+	Control struct {
 		Priority                           NetworkMessagePriority
 		IsBACNetConfirmedRequestPDUPresent bool
-		SourceSpecifiersPresent            bool
-		DestinationSpecifiersPresent       bool
+		SourceAddressPresent               bool
+		DestinationAddressPresent          bool
 		IsNDSUNetworkLayerMessage          bool
 	}
 
-	// Specifics is the address information for Source and Destination, although the values differ slightly.
-	Specifics struct {
+	// Address is the address information for Source and Destination, although the values differ slightly.
+	// MacLen 0 means broacdast, Length 0 means broadcast Mac, and Address is nil.
+	// These are defined in 6.2.2, but the encoding is different for each type. We are only supporting
+	// "BACnet/IP", which is essentially IP addresses. Addresses are 6 bytes long: From the most
+	// significant to the least: the IP address, then 2 bytes for the port
+	Address struct {
+		// The source code has Mac and MacLen, but the encoding does not. I think it may be for
+		// creating addresses, but I don't think we need them.
+		// MacLen  uint8  // MacLen, but really a flag. ([]byte has len that we use for encoding)
+		// Mac     []byte // for IP, 4 bytes for IP, 2 for port. I guess it only supports v4
+		// Network is 1-65535 for Destinations, and 1-65534 for Sources
+		// In any case, I don't think we'll have both Mac and Address set, so we only need one.
 		Network uint16
-		Length  uint8  // For destination, this can be 0, which means broadcast. So Address is nil...?
-		Address []byte // This could be a subnet and node, but we don't really care at this level
+		Length  uint8  // It's called Length, but it's really flag. Rename this.
+		Addr    []byte // This could be a subnet and node, but we don't really care at this level
 	}
 
-	// NPDUMessage is the literal struct to send across the wire. This struct will be encoded and decoded off the
-	// wire. Network layer Protocol Data Unit.
+	// Message is the literal struct to send across the wire. This struct will be encoded and decoded off
+	// the wire. This is the NPDU in the spec (6.2) Network layer Protocol Data Unit.
 	// Only the ProtocolVersion and Control are guaranteed. For the other members, they are dependent on
-	// the control values. Although, I think there are no empty messages.
-	NPDUMessage struct {
-		ProtocolVersion byte        // Version, which is probably 1
-		Control         NPDUControl // Information about the rest of the struct
-		Destination     *Specifics  // if this exists, HopCount should be set, but after Source
-		Source          *Specifics
+	// the control values. Although, I think there are no empty messages. Unless it is an actual byte,
+	// uint8 will be preferred over byte.
+	// Implementation note: We use pointers to show that parts of the message may be empty. It's not a
+	// good way, but it's convenient shorthand.
+	Message struct {
+		ProtocolVersion uint8    // Version, which is probably 1
+		Control         Control  // Information about the rest of the struct
+		Destination     *Address // if this exists, HopCount should be set, but after Source
+		Source          *Address
 		HopCount        *uint8
-		MessageType     *uint8
+		MessageType     NetworkLayerMessageType // enum, so can't be nil, and not good to make it uint8
 		VendorID        *uint16
-		APDU            []byte // The application layer should have already encoded this
+		APDU            apdu.Message
 	}
 )
 
-// NewNPDUMessage creates an NPDUMessage. Depending on the control information, different portions of the
-// message will be valid and others will be nil. This is kind of low level, and numerous other constructors can be
-// made
-func NewNPDUMessage(control NPDUControl, dest, src *Specifics, hopCount *uint8,
-	messageType *uint8, vendorID *uint16, apdu []byte) *NPDUMessage {
-	return &NPDUMessage{
+// NewControl creates a control byte from the values. We return the actual struct instead of a pointer because
+// that is how it will generally be used.
+func NewControl(priority NetworkMessagePriority, isBACNetConfirmedRequestPDUPresent, sourceAddressPresent,
+	destinationAddressPresent, isNDSUNetworkLayerMessage bool) Control {
+	return Control{
+		Priority:                           priority,
+		IsBACNetConfirmedRequestPDUPresent: isBACNetConfirmedRequestPDUPresent,
+		SourceAddressPresent:               sourceAddressPresent,
+		DestinationAddressPresent:          destinationAddressPresent,
+		IsNDSUNetworkLayerMessage:          isNDSUNetworkLayerMessage,
+	}
+}
+
+// NewMessage creates an NPDUMessage. Depending on the control information, different portions of the
+// message will be valid and others will be nil. This is kind of low level, and numerous other
+// constructors can be made
+func NewMessage(control Control, dest, src *Address, hopCount uint8,
+	messageType NetworkLayerMessageType, vendorID *uint16, apdu apdu.Message) *Message {
+	return &Message{
 		ProtocolVersion: DefaultProtocolVersion,
 		Control:         control,
 		Destination:     dest,
 		Source:          src,
-		HopCount:        hopCount,
+		HopCount:        &hopCount,
 		MessageType:     messageType,
 		VendorID:        vendorID,
 		APDU:            apdu,
 	}
 }
 
-// NewNPDUControl creates a control byte from the values
-func NewNPDUControl(priority NetworkMessagePriority, isBACNetConfirmedRequestPDUPresent, sourceSpecifiersPresent, destinationSpecifiersPresent, isNDSUNetworkLayerMessage bool) *NPDUControl {
-	return &NPDUControl{
-		Priority:                           priority,
-		IsBACNetConfirmedRequestPDUPresent: isBACNetConfirmedRequestPDUPresent,
-		SourceSpecifiersPresent:            sourceSpecifiersPresent,
-		DestinationSpecifiersPresent:       destinationSpecifiersPresent,
-		IsNDSUNetworkLayerMessage:          isNDSUNetworkLayerMessage,
-	}
-}
+//func NewAddress(
 
 // Add this method to byte.Buffer for our usage. I actually don't know if it's big or little endian yet, so this
 // is to encapsulate that.
@@ -130,7 +171,7 @@ func writeDoubleByte(buf *bytes.Buffer, db uint16) error {
 }
 
 // XXX - Do I have the bits backwards?
-func encodeNPDUControl(ctrl NPDUControl) byte {
+func encodeControl(ctrl Control) byte {
 	// Start from the most significant bytes, and shift
 	var encoded byte
 	if ctrl.IsNDSUNetworkLayerMessage {
@@ -138,12 +179,12 @@ func encodeNPDUControl(ctrl NPDUControl) byte {
 	}
 	// shift two because reserved bit
 	encoded = encoded << 2
-	if ctrl.DestinationSpecifiersPresent {
+	if ctrl.DestinationAddressPresent {
 		encoded |= 1
 	}
 	// shift two because reserved bit
 	encoded = encoded << 2
-	if ctrl.SourceSpecifiersPresent {
+	if ctrl.SourceAddressPresent {
 		encoded |= 1
 	}
 	encoded = encoded << 1
@@ -158,99 +199,104 @@ func encodeNPDUControl(ctrl NPDUControl) byte {
 }
 
 // XXX - Do I have the bits backwards?
-func decodeNPDUControl(data byte) NPDUControl {
+func decodeControl(data byte) Control {
 	// Start from the most significant bytes, and shift
-	var ctrl NPDUControl
+	var ctrl Control
 	ctrl.IsNDSUNetworkLayerMessage = (data & 0b10000000) != 0
-	ctrl.DestinationSpecifiersPresent = (data & 0b00100000) != 0
-	ctrl.SourceSpecifiersPresent = (data & 0b00001000) != 0
+	ctrl.DestinationAddressPresent = (data & 0b00100000) != 0
+	ctrl.SourceAddressPresent = (data & 0b00001000) != 0
 	ctrl.IsBACNetConfirmedRequestPDUPresent = (data & 0b00000100) != 0
 	ctrl.Priority = (NetworkMessagePriority)(data & 0b00000011)
 
 	return ctrl
 }
 
-func writeSpecifics(buf *bytes.Buffer, spec *Specifics) error {
-	if e := writeDoubleByte(buf, spec.Network); e != nil {
+func writeAddress(buf *bytes.Buffer, addr *Address) error {
+	if e := writeDoubleByte(buf, addr.Network); e != nil {
 		return e
 	}
-	if e := buf.WriteByte(spec.Length); e != nil {
+	if e := buf.WriteByte(addr.Length); e != nil {
 		return e
 	}
-	if spec.Length > 0 {
+	if addr.Length > 0 {
 		// Do we need this? Otherwise, maybe we pass in nil to ByteBuffer.Write?
-		if _, e := buf.Write(spec.Address); e != nil {
+		if _, e := buf.Write(addr.Addr); e != nil {
 			return e
 		}
 	}
 	return nil
 }
 
-func readSpecifics(buf *bytes.Buffer) (*Specifics, error) {
-	var spec Specifics
+func readAddress(buf *bytes.Buffer) (*Address, error) {
+	var addr Address
 	db, e := readDoubleByte(buf)
 	if e != nil {
 		return nil, e
 	}
-	spec.Network = db
+	addr.Network = db
 	b, e := buf.ReadByte()
 	if e != nil {
 		return nil, e
 	}
-	spec.Length = b
-	if spec.Length > 0 {
+	addr.Length = b
+	if addr.Length > 0 {
 		// read uses len, not capacity
-		addr := make([]byte, spec.Length)
-		bytesRead, e := buf.Read(addr)
+		addrBuf := make([]byte, addr.Length)
+		bytesRead, e := buf.Read(addrBuf)
 		if e != nil {
 			return nil, e
 		}
-		if bytesRead != int(spec.Length) {
-			return nil, fmt.Errorf("read %d bytes, expected %d bytes", bytesRead, spec.Length)
+		if bytesRead != int(addr.Length) {
+			return nil, fmt.Errorf("read %d bytes, expected %d bytes", bytesRead, addr.Length)
 		}
-		spec.Address = addr
+		addr.Addr = addrBuf
 	}
-	return &spec, nil
+	return &addr, nil
 }
 
-// Encode an NPDUMessage
-func Encode(message *NPDUMessage) ([]byte, error) {
+// Encode a message
+func (m *Message) Encode() ([]byte, error) {
 	// We only know that it will be 2 bytes plus data.
 	b := make([]byte, 0, 3)
 	buf := bytes.NewBuffer(b)
-	if e := buf.WriteByte(message.ProtocolVersion); e != nil {
+	if e := buf.WriteByte(m.ProtocolVersion); e != nil {
 		return nil, e
 	}
-	if e := buf.WriteByte(encodeNPDUControl(message.Control)); e != nil {
+	if e := buf.WriteByte(encodeControl(m.Control)); e != nil {
 		return nil, e
 	}
 
-	if message.Control.DestinationSpecifiersPresent {
-		if e := writeSpecifics(buf, message.Destination); e != nil {
+	if m.Control.DestinationAddressPresent {
+		if e := writeAddress(buf, m.Destination); e != nil {
 			return nil, e
 		}
 	}
-	if message.Control.SourceSpecifiersPresent {
-		if e := writeSpecifics(buf, message.Source); e != nil {
+	if m.Control.SourceAddressPresent {
+		if e := writeAddress(buf, m.Source); e != nil {
 			return nil, e
 		}
 	}
-	if message.Control.DestinationSpecifiersPresent {
-		if e := buf.WriteByte(*message.HopCount); e != nil {
+	if m.Control.DestinationAddressPresent {
+		if e := buf.WriteByte(*m.HopCount); e != nil {
 			return nil, e
 		}
 	}
 	// vendorID goes in between message type and APDU, but I don't which one it accompanies.
-	if message.Control.IsNDSUNetworkLayerMessage {
-		if e := buf.WriteByte(*message.MessageType); e != nil {
+	if m.Control.IsNDSUNetworkLayerMessage {
+		if e := buf.WriteByte((byte)(m.MessageType)); e != nil {
+			return nil, e
+		}
+	} else if m.APDU != nil {
+		apduBytes, e := m.APDU.Encode()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = buf.Write(apduBytes); e != nil {
 			return nil, e
 		}
 	} else {
-		if _, e := buf.Write(message.APDU); e != nil {
-			return nil, e
-		}
+		return nil, fmt.Errorf("Message was not a NDSU, but does not have application data (APDU)")
 	}
 
 	return buf.Bytes(), nil
-
 }

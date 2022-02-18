@@ -1,4 +1,4 @@
-package bacnet
+package npdu
 
 import (
 	"bytes"
@@ -34,24 +34,24 @@ func TestDoubleByte(t *testing.T) {
 	})
 }
 
-func TestNPDUControl(t *testing.T) {
-	t.Run("TestCreateNPDUControl", func(t *testing.T) {
-		ctrl := NewNPDUControl(UrgentMessage, false, true, false, true)
+func TestControl(t *testing.T) {
+	t.Run("TestCreateControl", func(t *testing.T) {
+		ctrl := NewControl(UrgentMessage, false, true, false, true)
 		assert.False(t, ctrl.IsBACNetConfirmedRequestPDUPresent, "Unexpected value")
-		assert.True(t, ctrl.SourceSpecifiersPresent, "Unexpected value")
-		assert.False(t, ctrl.DestinationSpecifiersPresent, "Unexpected value")
+		assert.True(t, ctrl.SourceAddressPresent, "Unexpected value")
+		assert.False(t, ctrl.DestinationAddressPresent, "Unexpected value")
 		assert.True(t, ctrl.IsNDSUNetworkLayerMessage, "Unexpected value")
 
 		t.Run("TestEncodeDecodeControl", func(t *testing.T) {
-			encoded := encodeNPDUControl(*ctrl)
+			encoded := encodeControl(ctrl)
 			// Verify that the two reserve bits are 0
 			assert.Equal(t, uint8(0b10001001), encoded, "Unexpected encoding")
 
-			decodedCtrl := decodeNPDUControl(encoded)
+			decodedCtrl := decodeControl(encoded)
 			assert.Equal(t, ctrl.IsBACNetConfirmedRequestPDUPresent, decodedCtrl.IsBACNetConfirmedRequestPDUPresent,
 				"unexpected value")
-			assert.Equal(t, ctrl.SourceSpecifiersPresent, decodedCtrl.SourceSpecifiersPresent, "Unexpected value")
-			assert.Equal(t, ctrl.DestinationSpecifiersPresent, decodedCtrl.DestinationSpecifiersPresent, "Unexpected value")
+			assert.Equal(t, ctrl.SourceAddressPresent, decodedCtrl.SourceAddressPresent, "Unexpected value")
+			assert.Equal(t, ctrl.DestinationAddressPresent, decodedCtrl.DestinationAddressPresent, "Unexpected value")
 			assert.Equal(t, ctrl.IsNDSUNetworkLayerMessage, decodedCtrl.IsNDSUNetworkLayerMessage, "Unexpected value")
 			assert.Equal(t, ctrl.Priority, decodedCtrl.Priority, "Unexpected value")
 		})
@@ -84,19 +84,19 @@ func TestSpecifics(t *testing.T) {
 	}
 	for _, tCase := range testCases {
 		t.Run(tCase.name, func(t *testing.T) {
-			spec := Specifics{
+			spec := Address{
 				Network: tCase.network,
 				Length:  tCase.length,
-				Address: tCase.address,
+				Addr:    tCase.address,
 			}
 			wBuf := bytes.NewBuffer(make([]byte, 0, 2))
-			assert.NoError(t, writeSpecifics(wBuf, &spec), "Unexpected error")
+			assert.NoError(t, writeAddress(wBuf, &spec), "Unexpected error")
 			rBuf := bytes.NewBuffer(wBuf.Bytes())
-			readSpec, err := readSpecifics(rBuf)
+			readSpec, err := readAddress(rBuf)
 			assert.NoError(t, err, "Unexpected error")
 			assert.Equal(t, spec.Network, readSpec.Network, "Value mismatch")
 			assert.Equal(t, spec.Length, readSpec.Length, "Value mismatch")
-			assert.True(t, compareSlice(spec.Address, readSpec.Address), "Value mismatch")
+			assert.True(t, compareSlice(spec.Addr, readSpec.Addr), "Value mismatch")
 		})
 	}
 }
