@@ -1,4 +1,4 @@
-package bacnet
+package transport
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/shigmas/modore/pkg/apdu"
-	"github.com/shigmas/modore/pkg/npdu"
+	"github.com/shigmas/modore/internal/apdu"
+	"github.com/shigmas/modore/internal/npdu"
 )
 
 // Just some experimentation
@@ -45,6 +45,7 @@ type (
 		SendConfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType, msg *apdu.ConfirmedMessage) error
 		SendUnconfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType, msg *apdu.UnconfirmedMessage) error
 
+		//		RegisterBVLCHandler(filter BVLCFunction, handler BVLCMessageHandler)
 		AddReceiveChannel(ch chan<- struct{})
 	}
 
@@ -56,6 +57,10 @@ type (
 		bacnetConn   *net.UDPConn // BACnet is UDP, so this is "the" connection
 		broadcastIP  net.IP
 		receivers    []chan<- struct{}
+
+		bvlcRegistry map[uint8]BVLCMessageHandlerList
+		npduRegistry map[uint8]NPDUMessageHandlerList
+		apduRegistry map[uint8]APDUMessageHandlerList
 	}
 
 	incomingData struct {
@@ -124,14 +129,17 @@ func (c *connection) loopForever(doneCh <-chan struct{}, listenCh <-chan incomin
 			if incoming.err != nil {
 				fmt.Println("Received error: ", incoming.err)
 			} else {
-				// XXX should handle an error here.
 				msg, err := NewBVLCMessageFromBytes(incoming.data)
 				if err != nil {
 					return
 				}
 				fmt.Printf("msg function: %d\n", msg.Function)
-				for _, r := range c.receivers {
-					r <- struct{}{}
+				for f, typeHandlers := range c.bvlcRegistry {
+					if uint8(msg.Function)&f != 0 {
+						for _, handler := range typeHandlers {
+							handler.GetBVLCChannel() <- msg
+						}
+					}
 				}
 			}
 		case <-doneCh:

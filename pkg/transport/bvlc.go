@@ -1,10 +1,10 @@
-package bacnet
+package transport
 
 import (
 	"bytes"
 	"fmt"
 
-	"github.com/shigmas/modore/pkg/apdu"
+	"github.com/shigmas/modore/internal/apdu"
 )
 
 // BVLC is the BACnet Virtual Link Layer. It allows us to talk to any type of network. But, really,
