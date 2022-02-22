@@ -1,4 +1,4 @@
-package bacnet
+package transport
 
 import (
 	"context"
@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shigmas/modore/pkg/apdu"
-	"github.com/shigmas/modore/pkg/npdu"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/shigmas/modore/internal/apdu"
+	"github.com/shigmas/modore/internal/npdu"
 )
 
 func TestNewConnection(t *testing.T) {
@@ -63,6 +64,7 @@ func TestWhoIs(t *testing.T) {
 
 	recvCh := make(chan struct{}, 1)
 
+	// I think this can be moved to a function to hide APDU. So, maybe some more stuff gets hidden.
 	appMsg := apdu.NewWhoisMessage(0, 999)
 	conn.Start()
 	defer func() {

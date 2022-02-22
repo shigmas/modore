@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/shigmas/modore/pkg/apdu"
+	"github.com/shigmas/modore/internal/apdu"
 )
 
 const (
