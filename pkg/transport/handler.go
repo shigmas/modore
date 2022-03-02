@@ -23,19 +23,24 @@ type (
 		GetErrorChannel() chan error
 	}
 
+	Equatable interface {
+		Equals(other Equatable) bool
+	}
+
+	// BVLCMessageChannel
 	BVLCMessageChannel chan *BVLCMessage
 	// BVLCMessageHandler can handle very low level messages.
 	BVLCMessageHandler interface {
+		Equatable
 		GetBVLCChannel() BVLCMessageChannel
 	}
-	BVLCMessageHandlerList []BVLCMessageHandler
 
-	NPDUMessageChannel chan *npdu.Message
+	NPDUMessageChannel chan npdu.Message
 	// NPDUMessageHandler can filter on network level messages
 	NPDUMessageHandler interface {
+		Equatable
 		GetNPDUChannel() NPDUMessageChannel
 	}
-	NPDUMessageHandlerList []NPDUMessageHandler
 
 	APDUMessageChannel chan *apdu.Message
 	// APDUMessageHandler will probably be what users typically use. Typically filtered on the
@@ -43,9 +48,9 @@ type (
 	// is a required message to handle. For convenience, a base struct which subscribes to the
 	// required BVLC and NPDU messages is provided.
 	APDUMessageHandler interface {
+		Equatable
 		GetAPDUChannel() APDUMessageChannel
 	}
-	APDUMessageHandlerList []APDUMessageHandler
 
 	// NPDUMessageHandlerBase handles the correct BVLCMessages that get hold NPDU Messages.
 	NPDUMessageHandlerBase struct {

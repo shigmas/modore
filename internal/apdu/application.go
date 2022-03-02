@@ -55,23 +55,23 @@ var (
 	_ TagType = (*ApplicationUnsignedIntType)(nil)
 )
 
-func (p *ApplicationNullType) EncodeAsTagData(class TagClass) []byte {
+func (p *ApplicationNullType) EncodeAsTagData(class TagClass) ([]byte, error) {
 	var control byte
-	p.encodeTagNumber(&control, uint8(TagNumberDataNull))
-	p.encodeClass(&control, class)
+	encodeTagNumber(&control, uint8(TagNumberDataNull))
+	encodeClass(&control, class)
 	// NULL is just 0 for everything
-	return []byte{control}
+	return []byte{control}, nil
 }
 
-func (p *ApplicationBoolType) EncodeAsTagData(class TagClass) []byte {
+func (p *ApplicationBoolType) EncodeAsTagData(class TagClass) ([]byte, error) {
 	var control byte
 	// Technically, this is not allowed, but this really clutters up the interface to have an error
 	// for this one case.
 	if class == TagContextSpecificClass {
 		// some kind of output?
 	}
-	p.encodeTagNumber(&control, uint8(TagNumberDataBool))
-	p.encodeClass(&control, class)
+	encodeTagNumber(&control, uint8(TagNumberDataBool))
+	encodeClass(&control, class)
 	shift := 0
 	if !p.val {
 		shift = 1
@@ -79,13 +79,13 @@ func (p *ApplicationBoolType) EncodeAsTagData(class TagClass) []byte {
 	control |= byte(1) << shift
 
 	// bool is encoded into the first byte
-	return []byte{control}
+	return []byte{control}, nil
 }
-func (p *ApplicationUnsignedIntType) EncodeAsTagData(class TagClass) []byte {
+func (p *ApplicationUnsignedIntType) EncodeAsTagData(class TagClass) ([]byte, error) {
 	var control byte
-	p.encodeTagNumber(&control, uint8(TagNumberDataUnsignedInt))
-	p.encodeClass(&control, class)
+	encodeTagNumber(&control, uint8(TagNumberDataUnsignedInt))
+	encodeClass(&control, class)
 
 	// This is not right
-	return []byte{control}
+	return []byte{control}, nil
 }

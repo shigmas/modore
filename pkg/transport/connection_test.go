@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,69 @@ import (
 	"github.com/shigmas/modore/internal/apdu"
 	"github.com/shigmas/modore/internal/npdu"
 )
+
+type (
+	TestHandler struct {
+		apduChan APDUMessageChannel
+		msg      *apdu.Message
+	}
+
+	TestRouter struct {
+		listenCh chan *BVLCMessage
+	}
+)
+
+var _ MessageRouter = (*TestRouter)(nil)
+var _ APDUMessageHandler = (*TestHandler)(nil)
+
+// Very crappy implementation. But, this was easy to adapt to the old test.
+func NewTestRouter(listenCh chan *BVLCMessage) *TestRouter {
+	return &TestRouter{listenCh}
+}
+
+func (r *TestRouter) Start(doneCh <-chan struct{}) error {
+	for {
+		select {
+		case <-r.listenCh:
+			return nil
+		case <-doneCh:
+			return fmt.Errorf("No response")
+		}
+	}
+}
+
+func (r *TestRouter) RouteMessage(message *BVLCMessage) error {
+	r.listenCh <- message
+	return nil
+}
+
+func NewTestHandler(ch APDUMessageChannel) *TestHandler {
+	return &TestHandler{ch, nil}
+}
+
+func (h *TestHandler) GetAPDUChannel() APDUMessageChannel {
+	return h.apduChan
+}
+
+func (h *TestHandler) Equals(other Equatable) bool {
+	if o, ok := other.(*TestHandler); ok {
+		return h == o
+	}
+	return false
+}
+
+func (h *TestHandler) Start(doneCh <-chan struct{}, wg *sync.WaitGroup) {
+	for {
+		select {
+		case msg := <-h.apduChan:
+			h.msg = msg
+		case <-doneCh:
+			wg.Done()
+			return
+		}
+	}
+
+}
 
 func TestNewConnection(t *testing.T) {
 	addr := []byte{192, 168, 3, 16}
@@ -31,11 +95,11 @@ func TestStartStopConnection(t *testing.T) {
 	conn, err := NewConnection(addr, 24)
 	assert.NoError(t, err, "Unexpected error creating connection")
 	t.Run("test no receive", func(t *testing.T) {
-		recvCh := make(chan struct{}, 1)
-		conn.AddReceiveChannel(recvCh)
+		r := NewTestRouter(make(chan *BVLCMessage, 1))
+		conn.SetMessageRouter(r)
 		ctx, cancelFunc := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancelFunc()
-		assert.Error(t, waitForResponse(ctx.Done(), recvCh), "Expected timeout in waiting for data")
+		assert.Error(t, r.Start(ctx.Done()), "Expected timeout in waiting for data")
 	})
 	t.Run("TestStartStop", func(t *testing.T) {
 		conn.Start()
@@ -44,37 +108,39 @@ func TestStartStopConnection(t *testing.T) {
 	assert.NoError(t, conn.Close(), "Error closing connection")
 }
 
-func waitForResponse(doneCh <-chan struct{}, listenCh <-chan struct{}) error {
-	for {
-		select {
-		case <-listenCh:
-			return nil
-		case <-doneCh:
-			return fmt.Errorf("No response")
-		}
-	}
-
-}
-
 // Just for now
 func TestWhoIs(t *testing.T) {
 	addr := []byte{192, 168, 3, 16}
 	conn, err := NewConnection(addr, 24)
 	assert.NoError(t, err, "Unexpected error in getting connection")
 
-	recvCh := make(chan struct{}, 1)
+	var wg sync.WaitGroup
+	// Create our test handler to catch the message
+	ch := make(APDUMessageChannel)
+	apduHandler := NewTestHandler(ch)
+	//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wg.Add(1)
+	go apduHandler.Start(ctx.Done(), &wg)
+
+	r := NewMessageNexus()
+	r.RegisterAPDUHandler(apdu.ServiceUnconfirmedIAm|apdu.ServiceUnconfirmedWhoIs, apduHandler)
+	r.Start()
+	defer r.Stop()
+	conn.SetMessageRouter(r)
 
 	// I think this can be moved to a function to hide APDU. So, maybe some more stuff gets hidden.
-	appMsg := apdu.NewWhoisMessage(0, 999)
+	appMsg, err := apdu.NewWhoisMessage(0, 999)
+	assert.NoError(t, err, "Unexpected error creating WhoIs Message")
 	conn.Start()
 	defer func() {
 		conn.Stop()
 		conn.Close()
 	}()
-	conn.AddReceiveChannel(recvCh)
-	ctx, cancelFunc := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancelFunc()
 	assert.NoError(t, conn.SendUnconfirmedMessage(npdu.NormalMessage, npdu.NetworkLayerWhoIsMessage, appMsg),
 		"Unexpected error sending who is")
-	assert.NoError(t, waitForResponse(ctx.Done(), recvCh), "timeout waiting for whois response")
+	wg.Wait()
+	assert.NotNil(t, apduHandler.msg, "Message Never received")
+
 }

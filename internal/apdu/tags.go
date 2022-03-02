@@ -1,5 +1,11 @@
 package apdu
 
+import (
+	"bytes"
+
+	"github.com/shigmas/modore/pkg/bacnet"
+)
+
 // Message Parameters
 // These are base types or interfaces. Concrete implementations are in the respective files.
 // APDU tags: all about encoding APDU message parameters.
@@ -48,8 +54,8 @@ package apdu
 type TagClass int8
 
 const (
-	TagApplicationClass     = iota
-	TagContextSpecificClass = 1
+	TagApplicationClass     TagClass = 0
+	TagContextSpecificClass          = 1
 )
 
 // TagNumberType is used in to specify the type in the tags, but is only in the tag number field for
@@ -83,7 +89,7 @@ type (
 		// This function will clear the existing control
 		// XXX: Pass in a byte Buffer for efficiency. In this case, tags are part of an APDU. In fact,
 		// maybe all encodings can take a byte.Buffer. That way, everything is in one buffer
-		EncodeAsTagData(class TagClass) []byte
+		EncodeAsTagData(class TagClass) ([]byte, error)
 	}
 
 	// Base for all types
@@ -96,8 +102,8 @@ type (
 // For application parameters/tags, they are under 14 and will fit in the control byte. For context specific,
 // they *can* be larger than 14, the nibble is set to F and the tag is first byte in the slice. Tag numbers
 // larger than 255 are not supported.
-func (b *TagTypeBase) encodeTagNumber(control *byte, tagNumber uint8) []byte {
-	if tagNumber < 14 {
+func encodeTagNumber(control *byte, tagNumber uint8) []byte {
+	if tagNumber <= 14 {
 		*control = byte(tagNumber << 4)
 		return nil
 	} else {
@@ -106,15 +112,36 @@ func (b *TagTypeBase) encodeTagNumber(control *byte, tagNumber uint8) []byte {
 		tagBytes[0] = tagNumber
 		return tagBytes
 	}
-
+	// No errors. uint8 is our max.
 }
 
-func (b *TagTypeBase) encodeClass(control *byte, t TagClass) {
-	// should | this like the other functions
+// The decode functions will sometimes read from the byte slice, so we use a buffer to keep track of how much of
+// the byte slice is read
+func decodeTagNumber(control byte, data *bytes.Buffer) (uint8, error) {
+	// Drop the right nibble
+	numOrFlag := control >> 4
+	if numOrFlag == 0x0F {
+		tagNum, err := data.ReadByte()
+		if err != nil {
+			return 0, bacnet.ErrInsufficientData
+		}
+
+		return uint8(tagNum), nil
+	} else {
+		return uint8(numOrFlag), nil
+	}
+}
+
+func encodeClass(control *byte, t TagClass) {
 	*control |= byte(t << 3)
 }
 
-func (b *TagTypeBase) encodeLength(control *byte, len uint) []byte {
+func decodeClass(control byte) TagClass {
+	data := 0b0001000 & control
+	return TagClass(data >> 3)
+}
+
+func encodeLength(control *byte, len uint) ([]byte, error) {
 
 	// I'm not sure if these comments help explain it better than the code. But, at least there are
 	// 2 explanations
@@ -122,16 +149,16 @@ func (b *TagTypeBase) encodeLength(control *byte, len uint) []byte {
 	// control: | 0-4|class|len|
 	//
 	// 5 <= len <= 253
-	// control: | 0-4|class|101| (bytes 5 and 7 are set, 6 is not){
+	// control: | 0-4|class|101| (bits 5 and 7 are set, 6 is not){
 	// len byte 0: length
 
 	// 254 <= len <= 65535
-	// control: | 0-4|class|101| (bytes 5 and 7 are set, 6 is not){
+	// control: | 0-4|class|101| (bits 5 and 7 are set, 6 is not){
 	// len byte 0: 254
 	// len byte 1,2: length
 	//
 	// 65535 <= len <= 2^32-1
-	// control: | 0-4|class|101| (bytes 5 and 7 are set, 6 is not){
+	// control: | 0-4|class|101| (bits 5 and 7 are set, 6 is not){
 	// len byte 0: 255
 	// len byte 1-4: length
 	var lengthBytes []byte
@@ -141,17 +168,52 @@ func (b *TagTypeBase) encodeLength(control *byte, len uint) []byte {
 		*control |= 5
 		if len <= 253 { // up to 253, length is the first byte, and the data is following
 			lengthBytes = EncodeUint(len, 1)
-		} else if len <= 65535 {
-			lengthBytes = make([]byte, 1, 1)
+		} else if len <= 0xFFFF {
+			lengthBytes = make([]byte, 1, 2)
 			lengthBytes[0] = 254
 			lengthBytes = append(lengthBytes, EncodeUint(len, 2)...)
-		} else {
+		} else if len <= 0xFFFFFFFF {
+			lengthBytes = make([]byte, 1, 4)
 			lengthBytes[0] = 255
 			lengthBytes = append(lengthBytes, EncodeUint(len, 4)...)
+		} else {
+			return nil, bacnet.ErrValueTooLarge
 		}
 	}
 
-	return lengthBytes
+	return lengthBytes, nil
+}
+
+// The asymmetry between encode and decode: we
+func decodeLength(control byte, data *bytes.Buffer) (uint, error) {
+	flagOrLen := control & 0x07 // keep the right three bits
+	if flagOrLen < 5 {
+		return uint(flagOrLen), nil
+	} else if flagOrLen == 5 {
+		flagOrLen, err := data.ReadByte()
+		if err != nil {
+			return 0, bacnet.ErrInsufficientData
+		}
+		if flagOrLen <= 253 { // up to 253, length is the first byte, and the data is following
+			return uint(flagOrLen), nil
+		} else if flagOrLen == 254 {
+			buf := make([]byte, 2)
+			bytesRead, err := data.Read(buf)
+			if err != nil || bytesRead != 2 {
+				return 0, bacnet.ErrInsufficientData
+			}
+			return DecodeUint(buf), nil
+		} else if flagOrLen == 255 {
+			buf := make([]byte, 4)
+			bytesRead, err := data.Read(buf)
+			if err != nil || bytesRead != 4 {
+				return 0, bacnet.ErrInsufficientData
+			}
+			return DecodeUint(buf), nil
+		}
+	}
+
+	return 0, bacnet.ErrInvalidData
 }
 
 // Encoding and decoding helpers
@@ -183,7 +245,8 @@ func GetUnsignedIntByteSize(val uint) uint {
 // 2. BACnet also wants 3
 // why would they?), but BACnet wants
 
-// EncodeUint encodes the data into a byte array
+// EncodeUint encodes the data into a byte array. It takes arbitrary sized ints (no limited to the 2 byte
+// boundaries.
 func EncodeUint(val uint, numBytes uint) []byte {
 
 	buf := make([]byte, numBytes, numBytes)
@@ -198,7 +261,7 @@ func EncodeUint(val uint, numBytes uint) []byte {
 	return buf
 }
 
-// DecodeUint takes the raw byte array and converts it back to the Uint
+// DecodeUint takes the raw byte array of arbitrary sizes and converts it back to the uint
 func DecodeUint(raw []byte) uint {
 
 	var val uint

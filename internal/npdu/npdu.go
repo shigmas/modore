@@ -3,6 +3,7 @@ package npdu
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/shigmas/modore/internal/apdu"
@@ -29,7 +30,7 @@ type NetworkLayerMessageType uint8
 // NetworkLayerMessageType values
 const (
 	NetworkLayerWhoIsMessage                     = 0x00
-	NetworkLayerIAmyMessage                      = 0x01
+	NetworkLayerIAmMessage                       = 0x01
 	NetworkLayerICouldBeMessage                  = 0x02
 	NetworkLayerRejectMessage                    = 0x03
 	NetworkLayerRouterBusyMessage                = 0x04
@@ -95,14 +96,21 @@ type (
 		Addr    []byte // This could be a subnet and node, but we don't really care at this level
 	}
 
-	// Message is the literal struct to send across the wire. This struct will be encoded and decoded off
+	// Message is the interface for MessageBase. This will be moved to the bacnet package.
+	Message interface {
+		GetMessageType() NetworkLayerMessageType
+		GetAPDUMessage() apdu.Message
+		Encode() ([]byte, error)
+	}
+
+	// MessageBase is the literal struct to send across the wire. This struct will be encoded and decoded off
 	// the wire. This is the NPDU in the spec (6.2) Network layer Protocol Data Unit.
 	// Only the ProtocolVersion and Control are guaranteed. For the other members, they are dependent on
 	// the control values. Although, I think there are no empty messages. Unless it is an actual byte,
 	// uint8 will be preferred over byte.
 	// Implementation note: We use pointers to show that parts of the message may be empty. It's not a
 	// good way, but it's convenient shorthand.
-	Message struct {
+	MessageBase struct {
 		ProtocolVersion uint8    // Version, which is probably 1
 		Control         Control  // Information about the rest of the struct
 		Destination     *Address // if this exists, HopCount should be set, but after Source
@@ -113,6 +121,8 @@ type (
 		APDU            apdu.Message
 	}
 )
+
+var _ Message = (*MessageBase)(nil)
 
 // NewControl creates a control byte from the values. We return the actual struct instead of a pointer because
 // that is how it will generally be used.
@@ -131,8 +141,8 @@ func NewControl(priority NetworkMessagePriority, isBACNetConfirmedRequestPDUPres
 // message will be valid and others will be nil. This is kind of low level, and numerous other
 // constructors can be made
 func NewMessage(control Control, dest, src *Address, hopCount uint8,
-	messageType NetworkLayerMessageType, vendorID *uint16, apdu apdu.Message) *Message {
-	return &Message{
+	messageType NetworkLayerMessageType, vendorID *uint16, apdu apdu.Message) *MessageBase {
+	return &MessageBase{
 		ProtocolVersion: DefaultProtocolVersion,
 		Control:         control,
 		Destination:     dest,
@@ -144,7 +154,68 @@ func NewMessage(control Control, dest, src *Address, hopCount uint8,
 	}
 }
 
-//func NewAddress(
+// NewMessageFromBytes decodees the byte back into a Message.
+func NewMessageFromBytes(data []byte) (*MessageBase, error) {
+	if len(data) < 2 {
+		return nil, errors.New("bytes do not contain an NPDU message")
+	}
+	version := uint8(data[0])
+	control := decodeControl(data[1])
+	message := MessageBase{
+		ProtocolVersion: version,
+		Control:         control,
+	}
+	// With the control byte, we can decode the rest of the message
+	buf := bytes.NewBuffer(data[2:])
+
+	if control.DestinationAddressPresent {
+		destAddr, err := readAddress(buf)
+		if err != nil {
+			return nil, errors.New("Error decoding address")
+		}
+		message.Destination = destAddr
+	}
+	if control.SourceAddressPresent {
+		srcAddr, err := readAddress(buf)
+		if err != nil {
+			return nil, errors.New("Error decoding address")
+		}
+		message.Source = srcAddr
+	}
+	if control.DestinationAddressPresent {
+		hopCount, err := buf.ReadByte()
+		if err != nil {
+			return nil, errors.New("Error decoding byte")
+		}
+		message.HopCount = &hopCount
+	}
+	if control.IsNDSUNetworkLayerMessage {
+		mType, err := buf.ReadByte()
+		if err != nil {
+			return nil, errors.New("Error decoding byte")
+		}
+		// Exception to the pointer for optional members.
+		message.MessageType = NetworkLayerMessageType(mType)
+	} else {
+		// Pass the rest of the bytes to get the message
+		msg, err := apdu.NewMessageFromBytes(buf.Bytes())
+		if err != nil {
+			return nil, errors.New("Error decoding APDU bytes: %w")
+		}
+		message.APDU = msg
+	}
+	return &message, nil
+}
+
+// GetMessageType gets the type from the message.
+func (m *MessageBase) GetMessageType() NetworkLayerMessageType {
+	return m.MessageType
+}
+
+// GetAPDUMessage gets the APDU message contained in the message
+func (m *MessageBase) GetAPDUMessage() apdu.Message {
+	return m.APDU
+}
 
 // Add this method to byte.Buffer for our usage. I actually don't know if it's big or little endian yet, so this
 // is to encapsulate that.
@@ -255,7 +326,7 @@ func readAddress(buf *bytes.Buffer) (*Address, error) {
 }
 
 // Encode a message
-func (m *Message) Encode() ([]byte, error) {
+func (m *MessageBase) Encode() ([]byte, error) {
 	// We only know that it will be 2 bytes plus data.
 	b := make([]byte, 0, 3)
 	buf := bytes.NewBuffer(b)

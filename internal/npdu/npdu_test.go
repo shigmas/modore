@@ -2,10 +2,11 @@ package npdu
 
 import (
 	"bytes"
-
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/shigmas/modore/internal/apdu"
 )
 
 func TestDoubleByte(t *testing.T) {
@@ -32,6 +33,33 @@ func TestDoubleByte(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestNPDUCoding(t *testing.T) {
+	// Should flesh this out with more test cases.
+	data := []byte{1, 0, 16, 8, 9, 0, 26, 3, 231}
+
+	// Create an APDU message to send.
+	appMsg, err := apdu.NewWhoisMessage(0, 999)
+	assert.NoError(t, err, "Unexpected error creating test APDU Message")
+
+	control := NewControl(NormalMessage, false, false, false, false)
+	npduMsg := NewMessage(control, nil, nil, 0xFF, NetworkLayerWhoIsMessage, nil, appMsg)
+
+	npduBytes, err := npduMsg.Encode()
+	assert.NoError(t, err, "Unexpected error encoding NPDU Message")
+	assert.Equal(t, data, npduBytes, "Encoding not expected")
+
+	npduDecoded, err := NewMessageFromBytes(npduBytes)
+	assert.NoError(t, err, "Unable to decode valid message")
+	// There are some differences, since we we conditionally encode/decode some fields (namely, hop count)
+	assert.Equal(t, npduMsg.ProtocolVersion, npduDecoded.ProtocolVersion, "ProtocolVersion did not match")
+	assert.Equal(t, npduMsg.Destination, npduDecoded.Destination, "Destination did not match")
+	assert.Equal(t, npduMsg.Source, npduDecoded.Source, "Source did not match")
+	assert.Equal(t, npduMsg.MessageType, npduDecoded.MessageType, "MessageType did not match")
+	assert.Equal(t, npduMsg.VendorID, npduDecoded.VendorID, "VendorID did not match")
+	assert.Equal(t, npduMsg.APDU, npduDecoded.APDU, "APDU did not match")
+
 }
 
 func TestControl(t *testing.T) {
@@ -71,7 +99,7 @@ func compareSlice(a, b []byte) bool {
 	return true
 }
 
-func TestSpecifics(t *testing.T) {
+func TestAddress(t *testing.T) {
 	testCases := []struct {
 		name    string
 		network uint16

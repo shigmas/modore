@@ -64,7 +64,7 @@ func NewBVLCMessage(function BVLCFunction, data []byte) *BVLCMessage {
 }
 
 func verifyFunction(maybe byte) bool {
-	var val BVLCFunction = BVLCFunction(maybe)
+	var val = BVLCFunction(maybe)
 	return val == BVLCFunctionResult ||
 		val == BVLCFunctioncWriteBroadcastDistributionTable ||
 		val == BVLCFunctioncBroadcastDistributionTable ||

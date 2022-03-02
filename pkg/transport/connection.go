@@ -31,8 +31,24 @@ const (
 )
 
 type (
+	// All messages are passed through here. Applications must register handlers
+	MessageRouter interface {
+		RouteMessage(message *BVLCMessage) error
+	}
+
+	// Register to receive messages.
+	MessageRegistrar interface {
+		RegisterBVLCHandler(filter BVLCFunction, handler BVLCMessageHandler)
+		RegisterNPDUHandler(filter npdu.NetworkLayerMessageType, handler NPDUMessageHandler)
+		RegisterAPDUHandler(filter apdu.ServiceUnconfirmed, handler APDUMessageHandler)
+		GetBVLCHandlers() map[uint8][]BVLCMessageHandler
+		GetNPDUHandlers() map[uint8][]NPDUMessageHandler
+		GetAPDUHandlers() map[uint8][]APDUMessageHandler
+	}
+
 	// Connection is the interface for connection to BACnet
 	Connection interface {
+		SetMessageRouter(r MessageRouter)
 		// If Start is called, Stop must also be called.
 		Start()
 		Stop()
@@ -44,9 +60,6 @@ type (
 		// These will change in the future, I think
 		SendConfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType, msg *apdu.ConfirmedMessage) error
 		SendUnconfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType, msg *apdu.UnconfirmedMessage) error
-
-		//		RegisterBVLCHandler(filter BVLCFunction, handler BVLCMessageHandler)
-		AddReceiveChannel(ch chan<- struct{})
 	}
 
 	connection struct {
@@ -56,11 +69,7 @@ type (
 		mask         uint16
 		bacnetConn   *net.UDPConn // BACnet is UDP, so this is "the" connection
 		broadcastIP  net.IP
-		receivers    []chan<- struct{}
-
-		bvlcRegistry map[uint8]BVLCMessageHandlerList
-		npduRegistry map[uint8]NPDUMessageHandlerList
-		apduRegistry map[uint8]APDUMessageHandlerList
+		router       MessageRouter
 	}
 
 	incomingData struct {
@@ -94,13 +103,15 @@ func NewConnection(ip4Addr []byte, netMask uint16) (Connection, error) {
 	return &connection{
 		bacnetConn:  conn,
 		broadcastIP: broadcast,
-		receivers:   make([]chan<- struct{}, 0),
 	}, nil
+}
+
+func (c *connection) SetMessageRouter(r MessageRouter) {
+	c.router = r
 }
 
 func (c *connection) Start() {
 	ctx, stopFunc := context.WithCancel(context.Background())
-
 	dataChannel := make(chan incomingData, 1)
 	go c.startListener(dataChannel)
 	c.wg.Add(1)
@@ -134,12 +145,8 @@ func (c *connection) loopForever(doneCh <-chan struct{}, listenCh <-chan incomin
 					return
 				}
 				fmt.Printf("msg function: %d\n", msg.Function)
-				for f, typeHandlers := range c.bvlcRegistry {
-					if uint8(msg.Function)&f != 0 {
-						for _, handler := range typeHandlers {
-							handler.GetBVLCChannel() <- msg
-						}
-					}
+				if err = c.router.RouteMessage(msg); err != nil {
+					fmt.Printf("RouteMessage Error: %v\n", err)
 				}
 			}
 		case <-doneCh:
@@ -192,10 +199,6 @@ func (c *connection) udpAddr(ipAddr net.IP) net.Addr {
 		IP:   ipAddr,
 		Port: DefaultPort,
 	}
-}
-
-func (c *connection) AddReceiveChannel(ch chan<- struct{}) {
-	c.receivers = append(c.receivers, ch)
 }
 
 func (c *connection) SendConfirmedMessage(priority npdu.NetworkMessagePriority,
