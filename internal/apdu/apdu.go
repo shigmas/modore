@@ -1,6 +1,11 @@
 package apdu
 
-import "bytes"
+import (
+	"bytes"
+	"errors"
+
+	"github.com/shigmas/modore/pkg/bacnet"
+)
 
 // Summary: (For more detail, the actual bits are laid out in front the struct that are represented by the bits
 // APDU encoding is a bit trickier than NPDU. There are eight types of message request types: Confirmed,
@@ -32,8 +37,9 @@ import "bytes"
 // deal with that. But, maybe.
 
 // PDUType is at least unconfirmed or confirmed, but more as well.
-type PDUType int8
+type PDUType uint8
 
+// The values for PDUType. I'm not sure if we will handle all of these
 const (
 	PDUTypeConfirmedServiceRequest   PDUType = 0
 	PDUTypeUnconfirmedServiceRequest         = 0x10
@@ -46,41 +52,41 @@ const (
 	// 6 more
 )
 
-// PDUService is the base service type
-type PDUService int8
+// ServiceConfirmed is the type of service for confirmed requests
+type ServiceConfirmed uint8
 
-// TBD: Make two "subclasses" PDUUnconfirmedService and PDUConfirmedService. Or, a template type
+// The values for ServiceConfirmed. We are explicit because these are transmitted.
 const (
-	PDUServiceUnconfirmedIAm PDUService = iota
-	// Need to fill these in, since I think these are the values sent over the wire
-	PDUServiceUnconfirmedWhoIs = 8
+	ServiceConfirmedAcknowledgeAlarm ServiceConfirmed = 0
+	ServiceConfirmedCovNotofication                   = 1
 )
 
 // ServiceUnconfirmed do not need confirmations. Should just be service, and we can figure out
 // confirmed/unconfirmed, since it can't be both.
 type ServiceUnconfirmed uint8
 
-// The values for ServiceUnconfirmed
+// The values for ServiceUnconfirmed. We are explicit because these are transmitted.
 const (
-	ServiceUnconfirmedIAm ServiceUnconfirmed = iota
-	ServiceUnconfirmedIHave
-	ServiceUnconfirmedCOVNotification
-	ServiceUnconfirmedEventNotification
-	ServiceUnconfirmedPrivateTransfer
-	ServiceUnconfirmedTextMessage
-	ServiceUnconfirmedTimeSync
-	ServiceUnconfirmedWhoHas
-	ServiceUnconfirmedWhoIs
-	ServiceUnconfirmedUTCTimeSync
-	ServiceUnconfirmedWriteGroup
+	ServiceUnconfirmedIAm               ServiceUnconfirmed = 0
+	ServiceUnconfirmedIHave                                = 1
+	ServiceUnconfirmedCOVNotification                      = 2
+	ServiceUnconfirmedEventNotification                    = 3
+	ServiceUnconfirmedPrivateTransfer                      = 4
+	ServiceUnconfirmedTextMessage                          = 5
+	ServiceUnconfirmedTimeSync                             = 6
+	ServiceUnconfirmedWhoHas                               = 7
+	ServiceUnconfirmedWhoIs                                = 8
+	ServiceUnconfirmedUTCTimeSync                          = 9
+	ServiceUnconfirmedWriteGroup                           = 10
 )
 
 type (
+	// Message is the basic interface for apdu messages.
 	Message interface {
 		Encode() ([]byte, error)
 	}
 
-	// Message is the base type for the various types of APDU messages.
+	// MessageBase is the base type for the various types of APDU messages.
 	MessageBase struct {
 		// The first nibble of the message is the service type. That's the only common part of the messages
 		ServiceType PDUType
@@ -114,10 +120,12 @@ type (
 		IsSegmented               bool
 		DoSegmentsFollow          bool
 		IsSegmentResponseAccepted bool
+		MaxSegmentsAccepted       uint8 // Only up to 7
+		MaxLengthAccepted         uint8 // Only up to 8
 		InvokeID                  uint8
 		SequenceNumber            *uint8 // if IsSegmented is true
 		ProposedWindowSize        *uint8 // if IsSegmented is true
-		ConfirmedServiceID        uint8
+		ServiceID                 ServiceConfirmed
 		ServiceData               []byte
 	}
 
@@ -137,8 +145,9 @@ type (
 	UnconfirmedMessage struct {
 		MessageBase
 		// The rest of the byte for the PDUType is 0
-		UnConfirmedServiceID PDUService
-		ServiceData          []TagType
+		ServiceID ServiceUnconfirmed
+		//ServiceData []TagType
+		ServiceData []TagType
 	}
 )
 
@@ -147,33 +156,167 @@ var (
 	_ (Message) = (*UnconfirmedMessage)(nil)
 )
 
-// signed matters, size does not, since we need to make it as small as possible in encoding.
-func NewWhoisMessage(low, high uint) *UnconfirmedMessage {
-	return &UnconfirmedMessage{
-		MessageBase:          MessageBase{PDUTypeUnconfirmedServiceRequest},
-		UnConfirmedServiceID: PDUServiceUnconfirmedWhoIs,
-		ServiceData: []TagType{
-			NewContextSpecificUnsignedInt(0, low),
-			NewContextSpecificUnsignedInt(1, high),
-		},
+// NewMessageFromBytes creates an APDU message from bytes by interpreting the first byte.
+func NewMessageFromBytes(data []byte) (Message, error) {
+	if len(data) < 1 {
+		return nil, errors.New("bytes do not contain an NPDU message")
 	}
+	pduType := PDUType(data[0] & 0xF0)
+	switch pduType {
+	case PDUTypeConfirmedServiceRequest:
+		return newConfirmedMessageFromBytes(pduType, data)
+	case PDUTypeUnconfirmedServiceRequest:
+		return newUnconfirmedMessageFromBytes(pduType, data)
+	default:
+		return nil, errors.New("Unimplemented PDUType")
+	}
+
 }
 
+func newConfirmedMessageFromBytes(pdu PDUType, data []byte) (*ConfirmedMessage, error) {
+	if len(data) < 3 {
+		return nil, errors.New("insufficient length for message type")
+	}
+	control := data[0]
+	maxSegs := data[1] & 0b0111000 >> 4
+	maxLen := data[1] & 0x0F
+
+	msg := ConfirmedMessage{
+		MessageBase:               MessageBase{pdu},
+		IsSegmented:               (control & 0x04) != 0,
+		DoSegmentsFollow:          (control & 0x03) != 0,
+		IsSegmentResponseAccepted: (control & 0x02) != 0,
+		MaxSegmentsAccepted:       maxSegs,
+		MaxLengthAccepted:         maxLen,
+		InvokeID:                  data[2],
+	}
+	currByteIndex := 3
+	if msg.IsSegmented {
+		if len(data) < 5 {
+			return nil, errors.New("insufficient length for message type")
+		}
+		seqNumber := data[currByteIndex]
+		currByteIndex++
+		msg.SequenceNumber = &seqNumber
+		winSize := data[currByteIndex]
+		currByteIndex++
+		msg.ProposedWindowSize = &winSize
+	}
+
+	msg.ServiceID = ServiceConfirmed(data[currByteIndex])
+	currByteIndex++
+
+	// These are parameters. Need to decode these too
+	msg.ServiceData = data[currByteIndex:]
+
+	return &msg, nil
+
+}
+
+// The first byte is the control byte, which has already been parsed, so unconfirmed messages
+// read from the second byte onward
+func newUnconfirmedMessageFromBytes(pdu PDUType, data []byte) (*UnconfirmedMessage, error) {
+	if len(data) < 2 {
+		return nil, errors.New("insufficient length for message type")
+	}
+
+	msg := UnconfirmedMessage{
+		MessageBase: MessageBase{pdu},
+		ServiceID:   ServiceUnconfirmed(data[1]),
+	}
+
+	// The parameters depend on the service type. So, we just have a big switch and parse the data
+	buf := bytes.NewBuffer(data[2:])
+	switch msg.ServiceID {
+	case ServiceUnconfirmedIAm:
+
+	case ServiceUnconfirmedWhoIs:
+		lowTag, err := NewContextSpecificUnsignedIntFromBytes(buf)
+		if err != nil {
+			return nil, err
+		}
+		highTag, err := NewContextSpecificUnsignedIntFromBytes(buf)
+		if err != nil {
+			return nil, err
+		}
+		return &UnconfirmedMessage{
+			MessageBase: MessageBase{PDUTypeUnconfirmedServiceRequest},
+			ServiceID:   ServiceUnconfirmedWhoIs,
+			ServiceData: []TagType{lowTag, highTag},
+		}, nil
+	default:
+		return nil, bacnet.ErrNotImplemented
+	}
+
+	return &msg, nil
+}
+
+// NewWhoisMessage is just here temporarily. This should be in bacnet, but it requires that we export more types.
+func NewWhoisMessage(low, high uint) (*UnconfirmedMessage, error) {
+	lowTag, err := NewContextSpecificUnsignedInt(0, low)
+	if err != nil {
+		return nil, err
+	}
+	highTag, err := NewContextSpecificUnsignedInt(1, high)
+	if err != nil {
+		return nil, err
+	}
+	return &UnconfirmedMessage{
+		MessageBase: MessageBase{PDUTypeUnconfirmedServiceRequest},
+		ServiceID:   ServiceUnconfirmedWhoIs,
+		ServiceData: []TagType{lowTag, highTag},
+	}, nil
+
+}
+
+func NewIAmMessage(objectID, objectInstance uint32, maxAPDULengthAccepted uint, segmentationSupported bool,
+	vendorID uint16) (*UnconfirmedMessage, error) {
+
+	devID, err := NewContextSpecificObjectID(0, objectID, objectInstance)
+	if err != nil {
+		return nil, err
+	}
+	maxAccepted, err := NewContextSpecificUnsignedInt(1, maxAPDULengthAccepted)
+	if err != nil {
+		return nil, err
+	}
+	segSupported, err := NewContextSpecificBool(2, segmentationSupported)
+	if err != nil {
+		return nil, err
+	}
+	vID, err := NewContextSpecificUnsignedInt(3, uint(vendorID))
+	if err != nil {
+		return nil, err
+	}
+
+	return &UnconfirmedMessage{
+		MessageBase: MessageBase{PDUTypeUnconfirmedServiceRequest},
+		ServiceID:   ServiceUnconfirmedWhoIs,
+		ServiceData: []TagType{devID, maxAccepted, segSupported, vID},
+	}, nil
+
+}
+
+// Encode is unimplemented
 func (cm *ConfirmedMessage) Encode() ([]byte, error) {
-	return nil, nil
+	return nil, bacnet.ErrNotImplemented
 }
 
-// This is generic enough to encode all Unconfirmed messages.
+// Encode is This is generic enough to encode all Unconfirmed messages.
 func (um *UnconfirmedMessage) Encode() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 2))
 
 	buf.WriteByte(byte(um.ServiceType)) // I thought << 5
-	buf.WriteByte(byte(um.UnConfirmedServiceID))
+	buf.WriteByte(byte(um.ServiceID))
 
 	for _, param := range um.ServiceData {
 		// This is probably more complicated than it needs to be. But, until I study the encodings for
 		// each type and class, it's better to keep them separate for now.
-		buf.Write(param.EncodeAsTagData(TagContextSpecificClass))
+		bs, err := param.EncodeAsTagData(TagContextSpecificClass)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(bs)
 	}
 
 	return buf.Bytes(), nil
