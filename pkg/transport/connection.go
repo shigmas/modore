@@ -58,8 +58,10 @@ type (
 		BroadcastAddress() *npdu.Address
 		DestinationAddress(dest net.IP) *npdu.Address
 		// These will change in the future, I think
-		SendConfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType, msg *apdu.ConfirmedMessage) error
-		SendUnconfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType, msg *apdu.UnconfirmedMessage) error
+		SendConfirmedMessage(priority npdu.NetworkMessagePriority, msgType npdu.NetworkLayerMessageType,
+			msg *apdu.ConfirmedMessage) error
+		SendUnconfirmedMessage(destination *npdu.Address, priority npdu.NetworkMessagePriority,
+			msgType npdu.NetworkLayerMessageType, msg *apdu.UnconfirmedMessage) error
 	}
 
 	connection struct {
@@ -126,7 +128,7 @@ func (c *connection) startListener(ch chan<- incomingData) {
 		// this doesn't block, I guess. So, just loop. If we need to, we can add a pause, I guess.
 		i, adr, err := c.bacnetConn.ReadFromUDP(b)
 		if i > 0 {
-			fmt.Printf("Received %d bytes: %s\n", i, string(b[:i]))
+			fmt.Printf("Received %d bytes: %v\n", i, b[:i])
 			ch <- incomingData{err, adr, b[:i]}
 		}
 	}
@@ -209,11 +211,11 @@ func (c *connection) SendConfirmedMessage(priority npdu.NetworkMessagePriority,
 // SendUnconfirmedMessage will be adapted as I hardcode less stuff
 // This handles all three "layers": APDU, NPDU, and BVLC. If we continue to do it like this, we
 // can have one byte stream that eventually gets sent over the UDP connection.
-func (c *connection) SendUnconfirmedMessage(priority npdu.NetworkMessagePriority,
+func (c *connection) SendUnconfirmedMessage(destination *npdu.Address, priority npdu.NetworkMessagePriority,
 	msgType npdu.NetworkLayerMessageType, msg *apdu.UnconfirmedMessage) error {
 
-	control := npdu.NewControl(priority, false, false, false, false)
-	npduMsg := npdu.NewMessage(control, nil, nil, DefaultHopCount, msgType, nil, msg)
+	npduMsg := npdu.NewMessage(priority, false, false, c.SourceAddress(), destination, DefaultHopCount, msgType,
+		nil, msg)
 
 	npduBytes, err := npduMsg.Encode()
 	if err != nil {

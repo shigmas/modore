@@ -2,6 +2,7 @@ package npdu
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,13 +39,11 @@ func TestDoubleByte(t *testing.T) {
 func TestNPDUCoding(t *testing.T) {
 	// Should flesh this out with more test cases.
 	data := []byte{1, 0, 16, 8, 9, 0, 26, 3, 231}
-
 	// Create an APDU message to send.
 	appMsg, err := apdu.NewWhoisMessage(0, 999)
 	assert.NoError(t, err, "Unexpected error creating test APDU Message")
 
-	control := NewControl(NormalMessage, false, false, false, false)
-	npduMsg := NewMessage(control, nil, nil, 0xFF, NetworkLayerWhoIsMessage, nil, appMsg)
+	npduMsg := NewMessage(NormalMessage, false, false, nil, nil, 0xFF, NetworkLayerWhoIsMessage, nil, appMsg)
 
 	npduBytes, err := npduMsg.Encode()
 	assert.NoError(t, err, "Unexpected error encoding NPDU Message")
@@ -64,7 +63,7 @@ func TestNPDUCoding(t *testing.T) {
 
 func TestControl(t *testing.T) {
 	t.Run("TestCreateControl", func(t *testing.T) {
-		ctrl := NewControl(UrgentMessage, false, true, false, true)
+		ctrl := newControl(UrgentMessage, false, true, false, true)
 		assert.False(t, ctrl.IsBACNetConfirmedRequestPDUPresent, "Unexpected value")
 		assert.True(t, ctrl.SourceAddressPresent, "Unexpected value")
 		assert.False(t, ctrl.DestinationAddressPresent, "Unexpected value")
@@ -85,18 +84,6 @@ func TestControl(t *testing.T) {
 		})
 
 	})
-}
-
-func compareSlice(a, b []byte) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	for i, e := range a {
-		if b[i] != e {
-			return false
-		}
-	}
-	return true
 }
 
 func TestAddress(t *testing.T) {
@@ -124,7 +111,7 @@ func TestAddress(t *testing.T) {
 			assert.NoError(t, err, "Unexpected error")
 			assert.Equal(t, spec.Network, readSpec.Network, "Value mismatch")
 			assert.Equal(t, spec.Length, readSpec.Length, "Value mismatch")
-			assert.True(t, compareSlice(spec.Addr, readSpec.Addr), "Value mismatch")
+			assert.True(t, reflect.DeepEqual(spec.Addr, readSpec.Addr), "Value mismatch")
 		})
 	}
 }

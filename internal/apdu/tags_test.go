@@ -2,29 +2,13 @@ package apdu
 
 import (
 	"bytes"
-	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/shigmas/modore/pkg/bacnet"
 )
-
-func compareSlice(a, b []byte) bool {
-	if a == nil && b != nil {
-		return false
-	}
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	for i, e := range a {
-		if b[i] != e {
-			fmt.Printf("%v mismatch with %v\n", a, b)
-			return false
-		}
-	}
-	return true
-}
 
 func TestTagEncodings(t *testing.T) {
 	t.Run("TestCodeTagNumber", func(t *testing.T) {
@@ -45,7 +29,7 @@ func TestTagEncodings(t *testing.T) {
 
 				trailingBytes := encodeTagNumber(&control, tCase.num)
 				assert.Equal(t, tCase.expectedByte, control, "Control byte mismatch")
-				assert.True(t, compareSlice(tCase.expectedBytes, trailingBytes), "Trailing bytes mismatch")
+				assert.True(t, reflect.DeepEqual(tCase.expectedBytes, trailingBytes), "Trailing bytes mismatch")
 			})
 		}
 
@@ -138,7 +122,7 @@ func TestLengthEncoding(t *testing.T) {
 					assert.Equal(t, tCase.expectedError, err)
 				} else {
 					assert.Equal(t, tCase.expectedControl, control, "Unexpected control byte after encoding length")
-					assert.True(t, compareSlice(tCase.expectedBytes, trailing),
+					assert.True(t, reflect.DeepEqual(tCase.expectedBytes, trailing),
 						"Trailing bytes not equal")
 				}
 
