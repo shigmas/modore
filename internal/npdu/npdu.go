@@ -126,7 +126,7 @@ var _ Message = (*MessageBase)(nil)
 
 // NewControl creates a control byte from the values. We return the actual struct instead of a pointer because
 // that is how it will generally be used.
-func NewControl(priority NetworkMessagePriority, isBACNetConfirmedRequestPDUPresent, sourceAddressPresent,
+func newControl(priority NetworkMessagePriority, isBACNetConfirmedRequestPDUPresent, sourceAddressPresent,
 	destinationAddressPresent, isNDSUNetworkLayerMessage bool) Control {
 	return Control{
 		Priority:                           priority,
@@ -140,8 +140,11 @@ func NewControl(priority NetworkMessagePriority, isBACNetConfirmedRequestPDUPres
 // NewMessage creates an NPDUMessage. Depending on the control information, different portions of the
 // message will be valid and others will be nil. This is kind of low level, and numerous other
 // constructors can be made
-func NewMessage(control Control, dest, src *Address, hopCount uint8,
-	messageType NetworkLayerMessageType, vendorID *uint16, apdu apdu.Message) *MessageBase {
+func NewMessage(priority NetworkMessagePriority, isConfirmed, isNetworkNessage bool, dest, src *Address,
+	hopCount uint8, messageType NetworkLayerMessageType, vendorID *uint16, apdu apdu.Message) *MessageBase {
+	hasSrcAddr := src != nil
+	hasDestAddr := dest != nil
+	control := newControl(priority, isConfirmed, hasSrcAddr, hasDestAddr, isNetworkNessage)
 	return &MessageBase{
 		ProtocolVersion: DefaultProtocolVersion,
 		Control:         control,
@@ -200,7 +203,7 @@ func NewMessageFromBytes(data []byte) (*MessageBase, error) {
 		// Pass the rest of the bytes to get the message
 		msg, err := apdu.NewMessageFromBytes(buf.Bytes())
 		if err != nil {
-			return nil, errors.New("Error decoding APDU bytes: %w")
+			return nil, err
 		}
 		message.APDU = msg
 	}
