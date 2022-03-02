@@ -6,7 +6,7 @@ import (
 	"github.com/shigmas/modore/pkg/bacnet"
 )
 
-// Message Parameters
+// Tags are essentially the Message Parameters
 // These are base types or interfaces. Concrete implementations are in the respective files.
 // APDU tags: all about encoding APDU message parameters.
 // APDU messages have parameters in the request data, Described in 20.2 of the spec. There are two
@@ -49,10 +49,11 @@ import (
 // Application tags, the tag number is overloaded as the type, so we don't include a tag number in the
 // struct. The enum includes TagNumber, though as an indication that it goes in the tag number slot in
 // the data. Either way, it's confusing, but hopefully, less confusing than the spec.
-// TagClass indicates the bit for the class. (bit 3 in the Tag byte).
 
+// TagClass indicates the bit for the class. (bit 3 in the Tag byte). They are either application or context specific
 type TagClass int8
 
+// The values for the TagClass. The details for each type are split into respective files.
 const (
 	TagApplicationClass     TagClass = 0
 	TagContextSpecificClass          = 1
@@ -62,6 +63,7 @@ const (
 // application class tags.
 type TagNumberType uint8
 
+// The values for teh TagNumberType
 const (
 	TagNumberDataNull            TagNumberType = iota // 0
 	TagNumberDataBool                                 // 1
@@ -97,7 +99,8 @@ type (
 	}
 )
 
-// Functions for parameters common to application and context specific
+// Application and ContextSpecific tags share some encodings, as well as the encoding that tells which which type
+// they are. This shared code is here
 
 // For application parameters/tags, they are under 14 and will fit in the control byte. For context specific,
 // they *can* be larger than 14, the nibble is set to F and the tag is first byte in the slice. Tag numbers
@@ -220,7 +223,7 @@ func decodeLength(control byte, data *bytes.Buffer) (uint, error) {
 
 // GetUnsignedIntByteSize returns the number of bytes the int will take. If an uint64 will fit into 3 bytes,
 // we will encoded to fit in 3 bytes.
-func GetUnsignedIntByteSize(val uint) uint {
+func getUnsignedIntByteSize(val uint) uint {
 	if val <= 0xFF {
 		return 1
 	} else if val <= 0xFFFF {

@@ -14,7 +14,7 @@ type (
 		TagTypeBase
 	}
 
-	// Rather tedious way to avoid several large and complicated switch statements
+	// The rest of these types are not all documented
 	ApplicationNullType struct {
 		ApplicationTypeBase
 	}

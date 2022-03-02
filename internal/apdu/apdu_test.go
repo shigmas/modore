@@ -26,7 +26,7 @@ func TestUInt(t *testing.T) {
 
 	for _, tcase := range testCases {
 		t.Run(tcase.name, func(t *testing.T) {
-			assert.Equal(t, tcase.wantSize, GetUnsignedIntByteSize(tcase.val))
+			assert.Equal(t, tcase.wantSize, getUnsignedIntByteSize(tcase.val))
 
 			b := EncodeUint(tcase.val, tcase.wantSize)
 			assert.Equal(t, int(tcase.wantSize), len(b))
@@ -35,3 +35,5 @@ func TestUInt(t *testing.T) {
 		})
 	}
 }
+
+// Higher level tests hit the encodings, so I'm skipping unit level tests for now

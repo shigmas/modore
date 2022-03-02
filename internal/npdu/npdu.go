@@ -1,3 +1,16 @@
+// Package npdu is the Network Protocol Data Unit. It wraps the APDU (Application Protocol Data Unit) with network
+// information. It is the middle layer of the bacnet stack, above APDU and below BVLC:
+// |------------------|
+// | BVLC message     |
+// ||----------------||
+// || NPDU message   ||
+// |||--------------|||
+// |||APDU message  |||
+// |||              |||
+// |||--------------|||
+// ||----------------||
+// |------------------|
+
 package npdu
 
 import (
@@ -80,17 +93,14 @@ type (
 	}
 
 	// Address is the address information for Source and Destination, although the values differ slightly.
-	// MacLen 0 means broacdast, Length 0 means broadcast Mac, and Address is nil.
-	// These are defined in 6.2.2, but the encoding is different for each type. We are only supporting
-	// "BACnet/IP", which is essentially IP addresses. Addresses are 6 bytes long: From the most
+	// MacLen 0 means broadcast, Length 0 means broadcast Mac, and Address is nil.
+	// These are defined in 6.2.2 of the spec, but the encoding is different for each type of network, but we are
+	// only supporting "BACnet/IP", which is essentially IP addresses. Addresses are 6 bytes long: From the most
 	// significant to the least: the IP address, then 2 bytes for the port
 	Address struct {
-		// The source code has Mac and MacLen, but the encoding does not. I think it may be for
-		// creating addresses, but I don't think we need them.
-		// MacLen  uint8  // MacLen, but really a flag. ([]byte has len that we use for encoding)
-		// Mac     []byte // for IP, 4 bytes for IP, 2 for port. I guess it only supports v4
+		// The C reference source code has Mac and MacLen as well, but it is not used in the encoding, so I'm not
+		// including here. I think it may be for creating addresses, but I don't think we need them.
 		// Network is 1-65535 for Destinations, and 1-65534 for Sources
-		// In any case, I don't think we'll have both Mac and Address set, so we only need one.
 		Network uint16
 		Length  uint8  // It's called Length, but it's really flag. Rename this.
 		Addr    []byte // This could be a subnet and node, but we don't really care at this level
@@ -111,7 +121,7 @@ type (
 	// Implementation note: We use pointers to show that parts of the message may be empty. It's not a
 	// good way, but it's convenient shorthand.
 	MessageBase struct {
-		ProtocolVersion uint8    // Version, which is probably 1
+		ProtocolVersion uint8    // Version, which should only be 1
 		Control         Control  // Information about the rest of the struct
 		Destination     *Address // if this exists, HopCount should be set, but after Source
 		Source          *Address
@@ -157,7 +167,7 @@ func NewMessage(priority NetworkMessagePriority, isConfirmed, isNetworkNessage b
 	}
 }
 
-// NewMessageFromBytes decodees the byte back into a Message.
+// NewMessageFromBytes decodes the byte back into a Message.
 func NewMessageFromBytes(data []byte) (*MessageBase, error) {
 	if len(data) < 2 {
 		return nil, errors.New("bytes do not contain an NPDU message")
@@ -355,7 +365,7 @@ func (m *MessageBase) Encode() ([]byte, error) {
 			return nil, e
 		}
 	}
-	// vendorID goes in between message type and APDU, but I don't which one it accompanies.
+
 	if m.Control.IsNDSUNetworkLayerMessage {
 		if e := buf.WriteByte((byte)(m.MessageType)); e != nil {
 			return nil, e
