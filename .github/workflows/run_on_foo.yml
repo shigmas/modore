@@ -18,7 +18,7 @@ jobs:
     - name: find entity maps
       id: find_entity_maps
       run: |
-        echo "::set-output name=entity_maps::$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.pull_request.head.sha }} | grep entityMap\.json )"
+        echo "::set-output name=entity_maps::$(git diff --name-only --diff-filter=ACMRT ${{ github.head_ref }} ${{ github.ref }} | grep entityMap\.json )"
     
   run_thing:
     runs-on: ubuntu-latest
