@@ -1,0 +1,40 @@
+name: On File Test
+on:
+  push:
+    paths: [ '*entityMap.json' ]
+  pull_request:
+    branches: [ '*' ]
+    
+jobs:
+  modified_entity_maps:
+    runs-on: ubuntu-latest
+    outputs:
+      entity_maps: ${{ steps.find_entity_maps.outputs.entity_maps }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 0
+    - name: Show GitHub context
+      env:
+        GITHUB_CONTEXT: ${{ toJson(github) }}
+      run: echo "$GITHUB_CONTEXT" 
+    - name: find entity maps
+      id: find_entity_maps
+      run: |
+        entity_maps=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep entityMap\.json )
+        echo Found: ${entity_maps}
+        echo "::set-output name=entity_maps::${entity_maps}"
+    
+  run_thing:
+    runs-on: ubuntu-latest
+    needs: [modified_entity_maps]
+    if: ${{needs.modified_entity_maps.outputs.entity_maps}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: list files
+        run: |
+          echo ${{ needs.modified_entity_maps.outputs.entity_maps }}
+      
+    

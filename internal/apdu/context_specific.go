@@ -33,6 +33,7 @@ import (
 type (
 	ContextSpecificTypeBase struct {
 		TagTypeBase
+		// TagNumber is a kind of ordering of the parameters in an APDU message
 		TagNumber uint8
 	}
 
@@ -91,6 +92,7 @@ func newContextSpecificTypeBase(tagNumber uint8) ContextSpecificTypeBase {
 	return ContextSpecificTypeBase{TagNumber: tagNumber}
 }
 
+// NewContextSpecificUnsignedInt creates an unsigned int, for the tag
 func NewContextSpecificUnsignedInt(tagNumber uint8, val uint) (TagType, error) {
 	return &ContextSpecificUnsignedIntType{
 		ContextSpecificTypeBase: newContextSpecificTypeBase(tagNumber),
@@ -99,6 +101,7 @@ func NewContextSpecificUnsignedInt(tagNumber uint8, val uint) (TagType, error) {
 
 }
 
+// NewContextSpecificUnsignedIntFromBytes decodes the bytes into an context specific unsigned int
 func NewContextSpecificUnsignedIntFromBytes(tagBuf *bytes.Buffer) (TagType, error) {
 	control, err := tagBuf.ReadByte()
 	if err != nil {
@@ -131,7 +134,7 @@ func NewContextSpecificUnsignedIntFromBytes(tagBuf *bytes.Buffer) (TagType, erro
 
 }
 
-// This case doesn't use class type. But others do...?
+// EncodeAsTagData encodes this unsigned int into the bytes
 func (p *ContextSpecificUnsignedIntType) EncodeAsTagData(class TagClass) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 1))
 
@@ -139,7 +142,7 @@ func (p *ContextSpecificUnsignedIntType) EncodeAsTagData(class TagClass) ([]byte
 	tagBytes := encodeTagNumber(&control, (uint8)(p.TagNumber))
 	encodeClass(&control, TagContextSpecificClass)
 
-	length := GetUnsignedIntByteSize(p.val)
+	length := getUnsignedIntByteSize(p.val)
 	lengthBytes, err := encodeLength(&control, length)
 	if err != nil {
 		return nil, err
@@ -161,6 +164,7 @@ func (p *ContextSpecificUnsignedIntType) EncodeAsTagData(class TagClass) ([]byte
 	return buf.Bytes(), nil
 }
 
+// NewContextSpecificBool creates the bool type with the tag
 func NewContextSpecificBool(tagNumber uint8, val bool) (TagType, error) {
 	return &ContextSpecificBoolType{
 		ContextSpecificTypeBase: newContextSpecificTypeBase(tagNumber),
@@ -169,7 +173,8 @@ func NewContextSpecificBool(tagNumber uint8, val bool) (TagType, error) {
 
 }
 
-func NewContextSpecificUnsignedBoolromBytes(tagBuf *bytes.Buffer) (TagType, error) {
+// NewContextSpecificBoolFromBytes decodes the bool type from bytes
+func NewContextSpecificBoolFromBytes(tagBuf *bytes.Buffer) (TagType, error) {
 	control, err := tagBuf.ReadByte()
 	if err != nil {
 		return nil, err
@@ -204,6 +209,7 @@ func NewContextSpecificUnsignedBoolromBytes(tagBuf *bytes.Buffer) (TagType, erro
 	}, nil
 }
 
+// EncodeAsTagData encodes the bool as bytes
 func (p *ContextSpecificBoolType) EncodeAsTagData(class TagClass) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 1))
 
@@ -237,6 +243,7 @@ func (p *ContextSpecificBoolType) EncodeAsTagData(class TagClass) ([]byte, error
 	return buf.Bytes(), nil
 }
 
+// NewContextSpecificObjectID creates an object identifier (type and instance)
 func NewContextSpecificObjectID(tagNumber uint8, objectType, objectInstance uint32) (TagType, error) {
 	// verify the values will fit
 	if objectType&0xFC00 != 0 || objectInstance&0xFF800000 != 0 {
@@ -250,6 +257,7 @@ func NewContextSpecificObjectID(tagNumber uint8, objectType, objectInstance uint
 
 }
 
+// NewContextSpecificObjectIDFromBytes decodes the object identifier from bytes
 func NewContextSpecificObjectIDFromBytes(tagBuf *bytes.Buffer) (TagType, error) {
 	control, err := tagBuf.ReadByte()
 	if err != nil {
@@ -287,7 +295,7 @@ func NewContextSpecificObjectIDFromBytes(tagBuf *bytes.Buffer) (TagType, error) 
 
 }
 
-// This case doesn't use class type. But others do...?
+// EncodeAsTagData encodes the object ID into bytes
 func (p *ContextSpecificObjectIDType) EncodeAsTagData(class TagClass) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 1))
 
@@ -313,7 +321,7 @@ func (p *ContextSpecificObjectIDType) EncodeAsTagData(class TagClass) ([]byte, e
 
 	// We have already validated that the values will fit in a 32 bit buffer, shift the
 	shiftedType := p.objectType << 22
-	stuffedVal := shiftedType & p.objectInstance
+	stuffedVal := shiftedType | p.objectInstance
 	buf.Write(EncodeUint(uint(stuffedVal), 4))
 	return buf.Bytes(), nil
 }

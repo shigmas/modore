@@ -1,3 +1,9 @@
+// Package apdu is the Application Protocol Data Unit for bacnet. This is the highest level "protocol" of bacnet.
+// As the name says, it provides the application level information for bacnet, so it is actually the biggest
+// internal package. As it is a 'protocol', the user level interaction is done outside of this package.
+// APDU messages have their own encoding, which is in this package, of course. . But, the message data is made of
+// primitive and not so primitive types. Those encodings are also in this package.
+
 package apdu
 
 import (
@@ -59,10 +65,12 @@ type ServiceConfirmed uint8
 const (
 	ServiceConfirmedAcknowledgeAlarm ServiceConfirmed = 0
 	ServiceConfirmedCovNotofication                   = 1
+	// This is just a partial list. Fill these in later
+	// ...
+	ServiceConfirmedMax = 30
 )
 
-// ServiceUnconfirmed do not need confirmations. Should just be service, and we can figure out
-// confirmed/unconfirmed, since it can't be both.
+// ServiceUnconfirmed do not need confirmations.
 type ServiceUnconfirmed uint8
 
 // The values for ServiceUnconfirmed. We are explicit because these are transmitted.
@@ -78,10 +86,11 @@ const (
 	ServiceUnconfirmedWhoIs                                = 8
 	ServiceUnconfirmedUTCTimeSync                          = 9
 	ServiceUnconfirmedWriteGroup                           = 10
+	ServiceUnconfirmedMax                                  = 11
 )
 
 type (
-	// Message is the basic interface for apdu messages.
+	// Message is the basic interface for apdu messages. Move this to a public pkg
 	Message interface {
 		Encode() ([]byte, error)
 	}
@@ -297,12 +306,12 @@ func NewIAmMessage(objectID, objectInstance uint32, maxAPDULengthAccepted uint, 
 
 }
 
-// Encode is unimplemented
+// Encode for confirmed messages is unimplemented right now
 func (cm *ConfirmedMessage) Encode() ([]byte, error) {
 	return nil, bacnet.ErrNotImplemented
 }
 
-// Encode is This is generic enough to encode all Unconfirmed messages.
+// Encode is for unconfirmed messages
 func (um *UnconfirmedMessage) Encode() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 2))
 
