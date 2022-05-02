@@ -9,7 +9,7 @@ jobs:
   modified_entity_maps:
     runs-on: ubuntu-latest
     outputs:
-      entity_maps: ${{steps.find_entity_maps.outputs.entity_maps}}
+      entity_maps: ${{ steps.find_entity_maps.outputs.entity_maps }}
     steps:
     - name: Checkout
       uses: actions/checkout@v2
@@ -22,7 +22,9 @@ jobs:
     - name: find entity maps
       id: find_entity_maps
       run: |
-        echo "::set-output name=entity_maps::$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep entityMap\.json )"
+        entity_maps=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep entityMap\.json )"
+        echo Found: ${entity_maps}
+        echo "::set-output name=entity_maps::${entity_maps}"
     
   run_thing:
     runs-on: ubuntu-latest
