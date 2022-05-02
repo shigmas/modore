@@ -22,7 +22,7 @@ jobs:
     - name: find entity maps
       id: find_entity_maps
       run: |
-        entity_maps=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep entityMap\.json )"
+        entity_maps=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} | grep entityMap\.json )
         echo Found: ${entity_maps}
         echo "::set-output name=entity_maps::${entity_maps}"
     
